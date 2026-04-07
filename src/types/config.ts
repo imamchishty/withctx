@@ -1,0 +1,130 @@
+import { z } from "zod";
+
+// --- Source schemas ---
+
+const LocalSourceSchema = z.object({
+  name: z.string(),
+  path: z.string(),
+});
+
+const JiraSourceSchema = z.object({
+  name: z.string(),
+  base_url: z.string().url(),
+  email: z.string().email().optional(),
+  token: z.string(),
+  project: z.string().optional(),
+  jql: z.string().optional(),
+  epic: z.string().optional(),
+  component: z.string().optional(),
+  exclude: z
+    .object({
+      type: z.array(z.string()).optional(),
+      status: z.array(z.string()).optional(),
+      label: z.array(z.string()).optional(),
+    })
+    .optional(),
+});
+
+const ConfluenceSourceSchema = z.object({
+  name: z.string(),
+  base_url: z.string().url(),
+  email: z.string().email().optional(),
+  token: z.string(),
+  space: z.string().optional(),
+  pages: z
+    .array(
+      z.object({
+        id: z.string().optional(),
+        url: z.string().url().optional(),
+      })
+    )
+    .optional(),
+  label: z.string().optional(),
+  parent: z.string().optional(),
+  exclude: z
+    .object({
+      label: z.array(z.string()).optional(),
+      title: z.array(z.string()).optional(),
+    })
+    .optional(),
+});
+
+const GitHubSourceSchema = z.object({
+  name: z.string(),
+  token: z.string(),
+  owner: z.string(),
+  repo: z.string().optional(),
+});
+
+const TeamsSourceSchema = z.object({
+  name: z.string(),
+  tenant_id: z.string(),
+  client_id: z.string(),
+  client_secret: z.string(),
+  channels: z.array(
+    z.object({
+      team: z.string(),
+      channel: z.string(),
+    })
+  ),
+});
+
+const SourcesSchema = z.object({
+  local: z.array(LocalSourceSchema).optional(),
+  jira: z.array(JiraSourceSchema).optional(),
+  confluence: z.array(ConfluenceSourceSchema).optional(),
+  github: z.array(GitHubSourceSchema).optional(),
+  teams: z.array(TeamsSourceSchema).optional(),
+});
+
+// --- Repo schema ---
+
+const RepoSchema = z.object({
+  name: z.string(),
+  github: z.string(),
+  branch: z.string().optional(),
+});
+
+// --- Cost schema ---
+
+const CostModelOverrideSchema = z.record(z.string(), z.string());
+
+const CostsSchema = z.object({
+  budget: z.number().positive().optional(),
+  alert_at: z.number().min(0).max(100).optional().default(80),
+  model: z.string().optional().default("claude-sonnet-4"),
+  model_override: CostModelOverrideSchema.optional(),
+});
+
+// --- Access schema ---
+
+const AccessSchema = z.object({
+  sensitive: z
+    .array(
+      z.object({
+        pattern: z.string().optional(),
+        tag: z.string().optional(),
+      })
+    )
+    .optional(),
+});
+
+// --- Main config schema ---
+
+export const CtxConfigSchema = z.object({
+  project: z.string(),
+  repos: z.array(RepoSchema).optional(),
+  sources: SourcesSchema.optional(),
+  costs: CostsSchema.optional(),
+  access: AccessSchema.optional(),
+});
+
+export type CtxConfig = z.infer<typeof CtxConfigSchema>;
+export type LocalSource = z.infer<typeof LocalSourceSchema>;
+export type JiraSource = z.infer<typeof JiraSourceSchema>;
+export type ConfluenceSource = z.infer<typeof ConfluenceSourceSchema>;
+export type GitHubSource = z.infer<typeof GitHubSourceSchema>;
+export type TeamsSource = z.infer<typeof TeamsSourceSchema>;
+export type Repo = z.infer<typeof RepoSchema>;
+export type CostsConfig = z.infer<typeof CostsSchema>;
+export type AccessConfig = z.infer<typeof AccessSchema>;

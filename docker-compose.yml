@@ -1,0 +1,13 @@
+services:
+  withctx:
+    build: .
+    ports:
+      - "4400:4400"
+    volumes:
+      - .:/data
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - GITHUB_TOKEN=${GITHUB_TOKEN}
+      - JIRA_TOKEN=${JIRA_TOKEN}
+      - CONFLUENCE_TOKEN=${CONFLUENCE_TOKEN}
+      - TEAMS_CLIENT_SECRET=${TEAMS_CLIENT_SECRET}

@@ -1,0 +1,47 @@
+name: Sync Context
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'  # Every 30 minutes
+  workflow_dispatch:          # Manual trigger
+
+jobs:
+  sync:
+    runs-on: self-hosted
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install withctx
+        run: npm install -g withctx
+
+      - name: Sync wiki from sources
+        run: ctx sync
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          JIRA_URL: ${{ secrets.JIRA_URL }}
+          JIRA_TOKEN: ${{ secrets.JIRA_TOKEN }}
+          JIRA_EMAIL: ${{ secrets.JIRA_EMAIL }}
+          CONFLUENCE_URL: ${{ secrets.CONFLUENCE_URL }}
+          CONFLUENCE_TOKEN: ${{ secrets.CONFLUENCE_TOKEN }}
+          CONFLUENCE_EMAIL: ${{ secrets.CONFLUENCE_EMAIL }}
+          TEAMS_CLIENT_ID: ${{ secrets.TEAMS_CLIENT_ID }}
+          TEAMS_CLIENT_SECRET: ${{ secrets.TEAMS_CLIENT_SECRET }}
+          TEAMS_TENANT_ID: ${{ secrets.TEAMS_TENANT_ID }}
+
+      - name: Commit and push wiki updates
+        run: |
+          git config user.name "withctx[bot]"
+          git config user.email "withctx[bot]@users.noreply.github.com"
+          git add .ctx/
+          git diff --staged --quiet || \
+            git commit -m "ctx: sync $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push

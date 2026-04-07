@@ -1,0 +1,89 @@
+# withctx configuration
+# Copy this file to ctx.yaml and update with your project details
+
+project: acme-platform
+
+# Multi-repo: list GitHub repos (omit for single-repo projects)
+repos:
+  - name: api-service
+    github: acme/api-service
+  - name: auth-service
+    github: acme/auth-service
+  - name: web-app
+    github: acme/web-app
+
+# Source connectors
+sources:
+  # Local files (auto-detected by ctx init)
+  local:
+    - name: docs
+      path: ./docs
+    - name: specs
+      path: ./specs
+
+  # Jira — multiple projects supported
+  jira:
+    - name: acme-core
+      base_url: https://acme.atlassian.net
+      email: admin@acme.com
+      token: ${JIRA_TOKEN}
+      project: ACME
+    # - name: acme-infra
+    #   base_url: https://acme.atlassian.net
+    #   token: ${JIRA_TOKEN}
+    #   project: INFRA
+    # - name: auth-bugs
+    #   base_url: https://acme.atlassian.net
+    #   token: ${JIRA_TOKEN}
+    #   jql: "project = ACME AND component = Authentication AND status != Done"
+
+  # Confluence — multiple spaces, pages, labels
+  confluence:
+    - name: engineering-wiki
+      base_url: https://acme.atlassian.net
+      email: admin@acme.com
+      token: ${CONFLUENCE_TOKEN}
+      space: ENG
+    # - name: architecture-decisions
+    #   base_url: https://acme.atlassian.net
+    #   token: ${CONFLUENCE_TOKEN}
+    #   label: adr
+    # - name: specific-page
+    #   base_url: https://acme.atlassian.net
+    #   token: ${CONFLUENCE_TOKEN}
+    #   pages:
+    #     - url: "https://acme.atlassian.net/wiki/spaces/ENG/pages/12345"
+
+  # GitHub — repos, issues, PRs
+  github:
+    - name: acme-org
+      token: ${GITHUB_TOKEN}
+      owner: acme
+
+  # Microsoft Teams
+  # teams:
+  #   - name: engineering
+  #     tenant_id: ${TEAMS_TENANT_ID}
+  #     client_id: ${TEAMS_CLIENT_ID}
+  #     client_secret: ${TEAMS_CLIENT_SECRET}
+  #     channels:
+  #       - team: Engineering
+  #         channel: payments-team
+  #       - team: Engineering
+  #         channel: architecture
+
+# Cost management
+costs:
+  budget: 20.00          # Monthly budget in USD
+  alert_at: 80           # Alert at 80% usage
+  model: claude-sonnet-4 # Default model (cheaper for routine ops)
+  model_override:
+    lint: claude-opus-4  # Best model for accuracy-critical ops
+
+# Access control
+access:
+  sensitive:
+    - pattern: "**/credentials*"
+    - pattern: "**/secrets*"
+    - tag: pii
+    - tag: internal-only
