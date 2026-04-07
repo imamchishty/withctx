@@ -4,9 +4,48 @@ Get from zero to a working context wiki in five minutes.
 
 ## Prerequisites
 
-- **Node.js 20+** — check with `node --version`
-- **Claude CLI** — installed and authenticated (`claude --version`)
-- **ANTHROPIC_API_KEY** — set in your environment or `.env` file
+You need two things installed. If you've never used Node.js before, follow these steps:
+
+### 1. Install Node.js 20+
+
+**Mac:**
+```bash
+# Using Homebrew (recommended)
+brew install node
+
+# Verify
+node --version   # should show v20+ or v22+
+```
+
+**Windows:**
+Download from https://nodejs.org (LTS version) and run the installer.
+
+**Linux:**
+```bash
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt-get install -y nodejs
+```
+
+### 2. Get an Anthropic API Key
+
+1. Go to https://console.anthropic.com
+2. Sign up or log in
+3. Go to API Keys → Create Key
+4. Copy the key (starts with `sk-ant-`)
+
+Set it in your terminal:
+```bash
+# Mac/Linux — add to your shell profile (~/.zshrc or ~/.bashrc)
+export ANTHROPIC_API_KEY=sk-ant-your-key-here
+
+# Windows (PowerShell)
+$env:ANTHROPIC_API_KEY = "sk-ant-your-key-here"
+```
+
+Or create a `.env` file in your project root:
+```
+ANTHROPIC_API_KEY=sk-ant-your-key-here
+```
 
 ## Step 1: Install
 
@@ -20,6 +59,14 @@ Verify it works:
 ctx --version
 # withctx v0.1.0
 ```
+
+## Step 1.5: Verify Everything Works
+
+```bash
+ctx doctor
+```
+
+This checks Node.js, API key, and connectivity. Fix any ❌ items before proceeding.
 
 ## Step 2: Initialize a Project
 

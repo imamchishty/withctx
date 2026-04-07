@@ -400,6 +400,310 @@ Exposes the wiki via a REST API. See [For Agents](15-for-agents.md) for API docu
 
 ---
 
+## ctx doctor
+
+Pre-flight diagnostics. Run this first if something isn't working.
+
+```bash
+ctx doctor
+```
+
+```
+withctx doctor
+──────────────
+
+  ✅ Node.js          v20.11.0
+  ✅ ctx.yaml          Found at ./ctx.yaml
+  ✅ .ctx/ directory    Initialized
+  ✅ ANTHROPIC_API_KEY  Set (sk-ant-...redacted)
+  ✅ API connection     Claude responds (model: claude-sonnet-4)
+
+  Sources:
+  ✅ local:docs         ./docs exists (16 files)
+  ✅ local:src          ./src exists (73 files)
+  ⚠️  jira:ACME         JIRA_URL set but JIRA_TOKEN missing
+  ❌ confluence:ENG     CONFLUENCE_URL not set
+
+  3 of 4 sources ready. Fix issues above before running ctx ingest.
+```
+
+Checks: Node.js version, ctx.yaml, .ctx/ directory, API key, API connection, and every configured source with specific fix instructions for each failure.
+
+---
+
+## ctx review
+
+Context-aware PR review. Uses wiki knowledge to catch issues no other review tool can find.
+
+```bash
+# Review a GitHub PR
+ctx review https://github.com/acme/api-service/pull/47
+
+# Review staged git changes
+ctx review --staged
+
+# Review a diff file
+ctx review --file changes.diff
+
+# Strict security-focused review
+ctx review https://github.com/acme/api-service/pull/47 --severity strict --focus security
+```
+
+```
+PR Review: #47 — Add payment retry logic
+
+Summary:
+  Adds exponential backoff retry to the payment processing pipeline.
+
+✅ Positives:
+  - Follows error handling pattern from conventions.md
+  - Retry delays match the SLA in services/payments.md
+
+⚠️  Warnings:
+  - No update to api-endpoints.md for the new retry status codes
+  - auth-service also calls the payment API (cross-repo/dependencies.md)
+    — confirm it handles the new retry responses
+
+❌ Issues:
+  - Missing idempotency key check — the retry could double-charge
+    (see decisions/payment-idempotency.md)
+
+Cross-Repo Impact:
+  - auth-service: may need to handle new 429 retry status
+  - web-app: loading state should account for longer retry delays
+
+Tokens: 12,340 input / 2,891 output ($0.08)
+```
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--staged` | Review currently staged git changes |
+| `--file <path>` | Review a diff file |
+| `--severity <level>` | Review strictness: `strict`, `normal` (default), `lenient` |
+| `--focus <area>` | Focus area: `security`, `performance`, `patterns`, `all` (default) |
+| `--output <path>` | Write review to file |
+
+---
+
+## ctx explain
+
+Deep explanation of any file using wiki context. Not just "what does this code do" — but WHY it exists and how it connects to the rest of the system.
+
+```bash
+# Explain a file
+ctx explain src/middleware/auth.ts
+
+# Brief explanation for quick understanding
+ctx explain src/middleware/auth.ts --depth brief
+
+# Detailed explanation for a new engineer
+ctx explain src/middleware/auth.ts --for new-engineer
+
+# Save explanation as a wiki page
+ctx explain src/middleware/auth.ts --save
+```
+
+```
+src/middleware/auth.ts
+─────────────────────
+
+What it does:
+  Validates JWT tokens on all protected routes. Extracts user ID
+  and roles from the token payload and attaches to request context.
+
+Why it exists:
+  After the Q3 security audit, the team migrated from session-based
+  auth to JWTs (see decisions/jwt-migration.md). This middleware is
+  the enforcement point for that decision.
+
+Patterns:
+  - Uses the "middleware chain" pattern (see conventions.md)
+  - Error responses follow the standard error envelope format
+
+Connections:
+  - Tokens are issued by auth-service (see cross-repo/dependencies.md)
+  - Token refresh happens client-side in web-app
+  - Rate limiting middleware runs BEFORE this (see architecture.md)
+
+Gotchas:
+  - Token secret is in Vault, NOT environment variables
+  - The skipAuth paths array must match the OpenAPI spec exactly
+  - Clock skew tolerance is set to 30 seconds
+
+Tokens: 8,120 input / 1,560 output ($0.05)
+```
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--depth <level>` | Detail level: `brief`, `normal` (default), `deep` |
+| `--for <audience>` | Explanation style: `new-engineer`, `senior`, `agent` |
+| `--save` | Save explanation as a wiki page |
+| `--output <path>` | Write to file |
+
+---
+
+## ctx impact
+
+Impact analysis for proposed changes. Ask "what would break if..." and get a comprehensive analysis.
+
+```bash
+ctx impact "migrate from MongoDB to PostgreSQL"
+ctx impact "remove auth-service and merge into api-service"
+ctx impact "upgrade to Node.js 22"
+ctx impact "switch from REST to gRPC between services"
+```
+
+```
+Impact Analysis: "migrate from MongoDB to PostgreSQL"
+─────────────────────────────────────────────────────
+
+Affected Services:
+  🔴 api-service — primary database, all models use Mongoose
+  🔴 auth-service — stores sessions and refresh tokens in MongoDB
+  🟡 web-app — no direct DB access, but API response shapes may change
+
+Dependencies:
+  - api-service → MongoDB Atlas (direct, would need to change)
+  - auth-service → MongoDB via shared connection lib
+  - Data pipeline reads from MongoDB oplog (would break)
+
+Key Risks:
+  🔴 HIGH: MongoDB aggregation pipelines have no direct Postgres equivalent
+  🔴 HIGH: Session storage migration requires zero-downtime cutover
+  🟡 MEDIUM: Mongoose ODM → Prisma/TypeORM rewrite in 2 services
+  🟢 LOW: Test fixtures use MongoDB memory server
+
+Deployment Impact:
+  Deploy order changes — database migration must happen BEFORE
+  any service deploys. See cross-repo/deployment-order.md.
+
+People/Teams:
+  - Backend team (owns api-service + auth-service)
+  - Data team (owns the pipeline reading oplog)
+  - DevOps (infrastructure changes)
+
+Estimated Effort: XL
+  2 services, 1 data pipeline, infra changes. Estimate 4-6 weeks.
+
+Recommended Approach:
+  1. Set up PostgreSQL alongside MongoDB (dual-write)
+  2. Migrate auth-service first (smaller surface)
+  3. Migrate api-service models incrementally
+  4. Cut over data pipeline last
+  5. Decommission MongoDB after 2 weeks stable
+
+Tokens: 24,560 input / 4,210 output ($0.14)
+```
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--scope <repos>` | Limit analysis to specific repos/services |
+| `--output <path>` | Write analysis to file |
+| `--save <path>` | Save as wiki page (e.g., `manual/impact-postgres-migration.md`) |
+| `--format <format>` | Output format: `terminal` (default), `markdown`, `json` |
+
+---
+
+## ctx watch
+
+Auto-sync when local files change. Watches configured source paths and triggers incremental sync.
+
+```bash
+ctx watch
+```
+
+```
+Watching ./src and ./docs for changes...
+[14:32:01] src/auth/handler.ts changed → syncing...
+[14:32:08] ✔ Updated repos/api-service/patterns.md
+[14:35:22] docs/architecture.md changed → syncing...
+[14:35:29] ✔ Updated architecture.md
+^C Stopped watching.
+```
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--interval <seconds>` | Polling interval alternative to fs.watch |
+
+---
+
+## ctx reset
+
+Wipe the wiki and start fresh.
+
+```bash
+ctx reset                  # prompts for confirmation
+ctx reset --force          # skip confirmation
+ctx reset --force --reingest  # wipe and immediately recompile
+```
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--force` | Skip confirmation prompt |
+| `--reingest` | Run full ingest after reset |
+
+---
+
+## ctx import
+
+Import an existing markdown file into the wiki. Useful for bootstrapping from existing CLAUDE.md or documentation.
+
+```bash
+ctx import ./CLAUDE.md                    # Claude splits into wiki pages
+ctx import ./notes/api-design.md --as api-design  # import as specific page
+```
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--as <name>` | Import as a specific page name |
+
+---
+
+## ctx graph
+
+Visualize page relationships in the wiki.
+
+```bash
+ctx graph                        # outputs mermaid diagram
+ctx graph --format dot           # Graphviz DOT format
+ctx graph --format text          # ASCII text
+```
+
+Writes to `.ctx/exports/graph.mermaid` (or `.dot`/`.txt`) and prints to terminal.
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--format <format>` | Output format: `mermaid` (default), `dot`, `text` |
+
+---
+
+## ctx config
+
+View and edit ctx.yaml from the CLI.
+
+```bash
+ctx config                       # show full config summary
+ctx config get costs.budget      # get a specific value
+ctx config set costs.budget 50   # set a value
+ctx config sources               # list sources with status
+```
+
+---
+
 ## Global Flags
 
 These flags work with any command:

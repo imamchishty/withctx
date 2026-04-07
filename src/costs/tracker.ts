@@ -6,7 +6,9 @@ export type OperationType =
   | "query"
   | "add"
   | "lint"
-  | "chat";
+  | "chat"
+  | "review"
+  | "explain";
 
 export interface TokenUsage {
   inputTokens: number;
@@ -178,6 +180,8 @@ export class CostTracker {
       add: { count: 0, cost: 0, tokens: 0 },
       lint: { count: 0, cost: 0, tokens: 0 },
       chat: { count: 0, cost: 0, tokens: 0 },
+      review: { count: 0, cost: 0, tokens: 0 },
+      explain: { count: 0, cost: 0, tokens: 0 },
     };
 
     if (!month) return breakdown;
