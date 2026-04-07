@@ -7,7 +7,8 @@ export type SourceType =
   | "github"
   | "jira"
   | "confluence"
-  | "teams";
+  | "teams"
+  | "sharepoint";
 
 export interface SourceStatus {
   name: string;

@@ -216,6 +216,54 @@ export function registerInitCommand(program: Command): void {
           });
         }
 
+        // Smart .gitignore handling
+        const gitignorePath = join(rootDir, ".gitignore");
+        const gitignoreEntries = [
+          ".ctx/sources/",
+          ".ctx/costs.json",
+          ".ctx/exports/",
+          ".ctx/sync-state.json",
+          ".env",
+        ];
+        // NOTE: .ctx/context/ is intentionally NOT gitignored — it's the wiki to share
+
+        if (existsSync(gitignorePath)) {
+          const gitignoreContent = readFileSync(gitignorePath, "utf-8");
+          const missingEntries: string[] = [];
+
+          for (const entry of gitignoreEntries) {
+            // Check if already present (exact line match or with trailing whitespace)
+            const lines = gitignoreContent.split("\n").map((l) => l.trim());
+            if (!lines.includes(entry)) {
+              missingEntries.push(entry);
+            }
+          }
+
+          if (missingEntries.length > 0) {
+            const section = [
+              "",
+              "# withctx — cached sources, costs, and exports (wiki context/ is tracked)",
+              ...missingEntries,
+              "",
+            ].join("\n");
+
+            writeFileSync(gitignorePath, gitignoreContent.trimEnd() + "\n" + section);
+
+            spinner.info(
+              chalk.dim(`Added to .gitignore: ${missingEntries.join(", ")}`)
+            );
+          }
+        } else {
+          // Create .gitignore with the entries
+          const section = [
+            "# withctx — cached sources, costs, and exports (wiki context/ is tracked)",
+            ...gitignoreEntries,
+            "",
+          ].join("\n");
+          writeFileSync(gitignorePath, section);
+          spinner.info(chalk.dim("Created .gitignore with withctx entries"));
+        }
+
         spinner.succeed(chalk.green("Project initialized successfully!"));
 
         // Print summary

@@ -14,6 +14,28 @@ import type { RawDocument } from "../../types/source.js";
 interface SyncOptions {
   source?: string;
   maxTokens?: string;
+  dryRun?: boolean;
+}
+
+/** Model pricing per million tokens (input/output) */
+const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+  "claude-sonnet-4": { input: 3, output: 15 },
+  "claude-sonnet-4-20250514": { input: 3, output: 15 },
+  "claude-opus-4": { input: 15, output: 75 },
+  "claude-haiku-3.5": { input: 0.8, output: 4 },
+  "claude-3-5-haiku-20241022": { input: 0.8, output: 4 },
+};
+
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function estimateCost(tokens: number, model: string): { input: number; output: number; total: number } {
+  const pricing = MODEL_PRICING[model] ?? MODEL_PRICING["claude-sonnet-4"];
+  const inputCost = (tokens / 1_000_000) * pricing.input;
+  const estimatedOutputTokens = Math.ceil(tokens * 0.3);
+  const outputCost = (estimatedOutputTokens / 1_000_000) * pricing.output;
+  return { input: inputCost, output: outputCost, total: inputCost + outputCost };
 }
 
 interface SyncState {
@@ -39,6 +61,7 @@ export function registerSyncCommand(program: Command): void {
     .description("Incrementally sync changed sources into the wiki")
     .option("--source <name>", "Sync a specific source only")
     .option("--max-tokens <n>", "Max tokens for Claude response")
+    .option("--dry-run", "Show what would be synced without calling Claude")
     .action(async (options: SyncOptions) => {
       const spinner = ora("Loading configuration...").start();
 
@@ -117,6 +140,48 @@ export function registerSyncCommand(program: Command): void {
         }
 
         spinner.succeed(`Found ${chalk.bold(String(changedDocs.length))} changed document(s)`);
+
+        if (options.dryRun) {
+          const model = config.costs?.model ?? "claude-sonnet-4";
+          const totalChars = changedDocs.reduce((sum, doc) => sum + doc.content.length, 0);
+          const tokens = estimateTokens(changedDocs.map(d => d.content).join(""));
+          const cost = estimateCost(tokens, model);
+
+          const pageManager = new PageManager(ctxDir);
+          const existingPages = pageManager.list().filter(
+            (p) => p !== "index.md" && p !== "log.md"
+          );
+
+          console.log();
+          console.log(chalk.bold("=== Dry Run Report (Sync) ==="));
+          console.log();
+          console.log(chalk.bold("Changed documents to sync:"));
+          for (const doc of changedDocs) {
+            const docTokens = estimateTokens(doc.content);
+            console.log(
+              `  ${chalk.cyan(doc.sourceName)} / ${doc.title}  ${chalk.dim(`(${doc.contentType}, ${doc.content.length} chars, ~${docTokens.toLocaleString()} tokens)`)}`
+            );
+          }
+          console.log();
+          console.log(chalk.bold("Summary:"));
+          console.log(`  Changed documents:  ${chalk.cyan(String(changedDocs.length))}`);
+          console.log(`  Total characters:   ${chalk.cyan(totalChars.toLocaleString())}`);
+          console.log(`  Estimated tokens:   ${chalk.cyan(tokens.toLocaleString())}`);
+          console.log(`  Model:              ${chalk.cyan(model)}`);
+          console.log(`  Est. input cost:    ${chalk.green(`$${cost.input.toFixed(4)}`)}`);
+          console.log(`  Est. output cost:   ${chalk.green(`$${cost.output.toFixed(4)}`)}`);
+          console.log(`  Est. total cost:    ${chalk.bold.green(`$${cost.total.toFixed(4)}`)}`);
+          console.log();
+          if (existingPages.length > 0) {
+            console.log(chalk.bold("Existing pages that may be updated:"));
+            for (const page of existingPages) {
+              console.log(`  ${chalk.dim(page)}`);
+            }
+          }
+          console.log();
+          console.log(chalk.dim("Run without --dry-run to execute."));
+          return;
+        }
 
         // Check Claude availability
         const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4");

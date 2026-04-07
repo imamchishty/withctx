@@ -21,6 +21,18 @@ import { registerReposCommand } from "./commands/repos.js";
 import { registerOnboardCommand } from "./commands/onboard.js";
 import { registerCostsCommand } from "./commands/costs.js";
 import { registerServeCommand } from "./commands/serve.js";
+import { registerDoctorCommand } from "./commands/doctor.js";
+import { registerWatchCommand } from "./commands/watch.js";
+import { registerResetCommand } from "./commands/reset.js";
+import { registerImportCommand } from "./commands/import.js";
+import { registerGraphCommand } from "./commands/graph.js";
+import { registerConfigCommand } from "./commands/config.js";
+
+// Global verbosity state — commands can import and check this
+export const globalState = {
+  verbose: false,
+  quiet: false,
+};
 
 // Resolve package.json for version
 const __filename = fileURLToPath(import.meta.url);
@@ -35,7 +47,14 @@ program
   .description(
     "Compiled context layer for AI agents — Claude compiles your project knowledge into a living wiki"
   )
-  .version(pkg.version, "-v, --version");
+  .version(pkg.version, "-v, --version")
+  .option("--verbose", "Show detailed output for all commands")
+  .option("--quiet", "Suppress non-essential output")
+  .hook("preAction", (thisCommand) => {
+    const opts = thisCommand.opts();
+    if (opts.verbose) globalState.verbose = true;
+    if (opts.quiet) globalState.quiet = true;
+  });
 
 // Register all subcommands
 registerInitCommand(program);
@@ -54,5 +73,11 @@ registerReposCommand(program);
 registerOnboardCommand(program);
 registerCostsCommand(program);
 registerServeCommand(program);
+registerDoctorCommand(program);
+registerWatchCommand(program);
+registerResetCommand(program);
+registerImportCommand(program);
+registerGraphCommand(program);
+registerConfigCommand(program);
 
 program.parse(process.argv);

@@ -14,6 +14,94 @@ interface IngestOptions {
   dryRun?: boolean;
 }
 
+/** Model pricing per million tokens (input/output) */
+const MODEL_PRICING: Record<string, { input: number; output: number }> = {
+  "claude-sonnet-4": { input: 3, output: 15 },
+  "claude-sonnet-4-20250514": { input: 3, output: 15 },
+  "claude-opus-4": { input: 15, output: 75 },
+  "claude-haiku-3.5": { input: 0.8, output: 4 },
+  "claude-3-5-haiku-20241022": { input: 0.8, output: 4 },
+};
+
+function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 4);
+}
+
+function estimateCost(tokens: number, model: string): { input: number; output: number; total: number } {
+  const pricing = MODEL_PRICING[model] ?? MODEL_PRICING["claude-sonnet-4"];
+  const inputCost = (tokens / 1_000_000) * pricing.input;
+  // Estimate output at ~30% of input tokens
+  const estimatedOutputTokens = Math.ceil(tokens * 0.3);
+  const outputCost = (estimatedOutputTokens / 1_000_000) * pricing.output;
+  return { input: inputCost, output: outputCost, total: inputCost + outputCost };
+}
+
+function getConnectorErrorHelp(connectorType: string, error: string): string {
+  switch (connectorType) {
+    case "jira":
+      return [
+        `  Jira connection failed: ${error}`,
+        "",
+        "  Required environment variables:",
+        "    JIRA_BASE_URL  — Your Jira instance URL (e.g., https://mycompany.atlassian.net)",
+        "    JIRA_EMAIL     — Your Atlassian account email",
+        "    JIRA_TOKEN     — API token (NOT your password)",
+        "",
+        "  To create an API token:",
+        "    1. Go to https://id.atlassian.com/manage-profile/security/api-tokens",
+        "    2. Click 'Create API token'",
+        "    3. Set JIRA_TOKEN in your .env file",
+      ].join("\n");
+    case "confluence":
+      return [
+        `  Confluence connection failed: ${error}`,
+        "",
+        "  Required environment variables:",
+        "    CONFLUENCE_BASE_URL — Your Confluence instance URL",
+        "    CONFLUENCE_EMAIL    — Your Atlassian account email",
+        "    CONFLUENCE_TOKEN    — API token",
+        "    CONFLUENCE_SPACE    — Space key (optional, filters results)",
+        "",
+        "  To create an API token:",
+        "    1. Go to https://id.atlassian.com/manage-profile/security/api-tokens",
+        "    2. Click 'Create API token'",
+        "    3. Set CONFLUENCE_TOKEN in your .env file",
+      ].join("\n");
+    case "github":
+      return [
+        `  GitHub connection failed: ${error}`,
+        "",
+        "  Required environment variables:",
+        "    GITHUB_TOKEN — Personal access token (classic) or fine-grained token",
+        "    GITHUB_OWNER — Repository owner (org or username)",
+        "",
+        "  To create a token:",
+        "    1. Go to https://github.com/settings/tokens",
+        "    2. Click 'Generate new token (classic)'",
+        "    3. Select scopes: repo, read:org",
+        "    4. Set GITHUB_TOKEN in your .env file",
+      ].join("\n");
+    case "teams":
+      return [
+        `  Microsoft Teams connection failed: ${error}`,
+        "",
+        "  Required environment variables:",
+        "    TEAMS_TENANT_ID     — Azure AD tenant ID",
+        "    TEAMS_CLIENT_ID     — App registration client ID",
+        "    TEAMS_CLIENT_SECRET — App registration client secret",
+        "",
+        "  To set up Teams access:",
+        "    1. Go to https://portal.azure.com/#view/Microsoft_AAD_RegisteredApps",
+        "    2. Register a new application",
+        "    3. Add API permissions: ChannelMessage.Read.All, Team.ReadBasic.All",
+        "    4. Create a client secret under 'Certificates & secrets'",
+        "    5. Set all three env vars in your .env file",
+      ].join("\n");
+    default:
+      return `  Source validation failed: ${error}`;
+  }
+}
+
 function buildConnectors(config: ReturnType<typeof loadConfig>, projectRoot: string): ConnectorRegistry {
   const registry = new ConnectorRegistry();
 
@@ -146,15 +234,15 @@ export function registerIngestCommand(program: Command): void {
           process.exit(1);
         }
 
-        // Validate connectors
+        // Validate connectors with helpful error messages
         spinner.text = "Validating source connections...";
         for (const connector of connectors) {
           const valid = await connector.validate();
           if (!valid) {
             const status = connector.getStatus();
-            spinner.warn(
-              chalk.yellow(`Source '${connector.name}' failed validation: ${status.error}`)
-            );
+            const helpMsg = getConnectorErrorHelp(connector.type, status.error ?? "Unknown error");
+            spinner.warn(chalk.yellow(`Source '${connector.name}' failed validation`));
+            console.error(chalk.yellow(helpMsg));
           }
         }
 
@@ -189,13 +277,47 @@ export function registerIngestCommand(program: Command): void {
         spinner.succeed(`Fetched ${chalk.bold(String(allDocuments.length))} documents from ${connectors.length} source(s)`);
 
         if (options.dryRun) {
+          const model = config.costs?.model ?? "claude-sonnet-4";
+          const totalChars = allDocuments.reduce((sum, doc) => sum + doc.content.length, 0);
+          const tokens = estimateTokens(allDocuments.map(d => d.content).join(""));
+          const cost = estimateCost(tokens, model);
+
+          // Get existing pages for predicted output
+          const pageManager = new PageManager(ctxDir);
+          const existingPages = pageManager.list().filter(
+            (p) => p !== "index.md" && p !== "log.md"
+          );
+
           console.log();
-          console.log(chalk.bold("Dry run — documents that would be ingested:"));
+          console.log(chalk.bold("=== Dry Run Report ==="));
+          console.log();
+          console.log(chalk.bold("Documents to ingest:"));
           for (const doc of allDocuments) {
+            const docTokens = estimateTokens(doc.content);
             console.log(
-              `  ${chalk.cyan(doc.sourceName)} / ${doc.title} (${doc.contentType}, ${doc.content.length} chars)`
+              `  ${chalk.cyan(doc.sourceName)} / ${doc.title}  ${chalk.dim(`(${doc.contentType}, ${doc.content.length} chars, ~${docTokens.toLocaleString()} tokens)`)}`
             );
           }
+          console.log();
+          console.log(chalk.bold("Summary:"));
+          console.log(`  Documents:          ${chalk.cyan(String(allDocuments.length))}`);
+          console.log(`  Total characters:   ${chalk.cyan(totalChars.toLocaleString())}`);
+          console.log(`  Estimated tokens:   ${chalk.cyan(tokens.toLocaleString())}`);
+          console.log(`  Model:              ${chalk.cyan(model)}`);
+          console.log(`  Est. input cost:    ${chalk.green(`$${cost.input.toFixed(4)}`)}`);
+          console.log(`  Est. output cost:   ${chalk.green(`$${cost.output.toFixed(4)}`)}`);
+          console.log(`  Est. total cost:    ${chalk.bold.green(`$${cost.total.toFixed(4)}`)}`);
+          console.log();
+          if (existingPages.length > 0) {
+            console.log(chalk.bold("Existing pages that may be updated:"));
+            for (const page of existingPages) {
+              console.log(`  ${chalk.dim(page)}`);
+            }
+          } else {
+            console.log(chalk.dim("  No existing pages — all pages will be newly created."));
+          }
+          console.log();
+          console.log(chalk.dim("Run without --dry-run to execute."));
           return;
         }
 
