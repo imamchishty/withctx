@@ -8,7 +8,10 @@ export type SourceType =
   | "jira"
   | "confluence"
   | "teams"
-  | "sharepoint";
+  | "sharepoint"
+  | "cicd"
+  | "coverage"
+  | "pull-requests";
 
 export interface SourceStatus {
   name: string;

@@ -69,12 +69,38 @@ const TeamsSourceSchema = z.object({
   ),
 });
 
+const CicdSourceSchema = z.object({
+  name: z.string(),
+  provider: z.enum(["github-actions", "jenkins", "gitlab-ci"]),
+  repo: z.string(),
+  token: z.string().optional(),
+  limit: z.number().positive().optional(),
+});
+
+const CoverageSourceSchema = z.object({
+  name: z.string(),
+  path: z.string(),
+  format: z.enum(["lcov", "cobertura", "istanbul-json"]).optional(),
+});
+
+const PullRequestsSourceSchema = z.object({
+  name: z.string(),
+  repo: z.string(),
+  token: z.string().optional(),
+  include: z.enum(["merged", "open", "all"]).optional(),
+  since: z.string().optional(),
+  labels: z.array(z.string()).optional(),
+});
+
 const SourcesSchema = z.object({
   local: z.array(LocalSourceSchema).optional(),
   jira: z.array(JiraSourceSchema).optional(),
   confluence: z.array(ConfluenceSourceSchema).optional(),
   github: z.array(GitHubSourceSchema).optional(),
   teams: z.array(TeamsSourceSchema).optional(),
+  cicd: z.array(CicdSourceSchema).optional(),
+  coverage: z.array(CoverageSourceSchema).optional(),
+  "pull-requests": z.array(PullRequestsSourceSchema).optional(),
 });
 
 // --- Repo schema ---
@@ -125,6 +151,9 @@ export type JiraSource = z.infer<typeof JiraSourceSchema>;
 export type ConfluenceSource = z.infer<typeof ConfluenceSourceSchema>;
 export type GitHubSource = z.infer<typeof GitHubSourceSchema>;
 export type TeamsSource = z.infer<typeof TeamsSourceSchema>;
+export type CicdSource = z.infer<typeof CicdSourceSchema>;
+export type CoverageSource = z.infer<typeof CoverageSourceSchema>;
+export type PullRequestsSource = z.infer<typeof PullRequestsSourceSchema>;
 export type Repo = z.infer<typeof RepoSchema>;
 export type CostsConfig = z.infer<typeof CostsSchema>;
 export type AccessConfig = z.infer<typeof AccessSchema>;
