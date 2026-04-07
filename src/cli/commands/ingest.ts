@@ -256,7 +256,8 @@ export function registerIngestCommand(program: Command): void {
 
         // Track costs
         if (response.tokensUsed) {
-          trackCostEntry(ctxDir, "ingest", response.tokensUsed);
+          const total = response.tokensUsed.input + response.tokensUsed.output;
+          trackCostEntry(ctxDir, "ingest", total);
         }
 
         // Summary
@@ -266,7 +267,8 @@ export function registerIngestCommand(program: Command): void {
         console.log(`    Documents fetched: ${chalk.cyan(String(allDocuments.length))}`);
         console.log(`    Wiki pages created: ${chalk.cyan(String(compiledPages.length))}`);
         if (response.tokensUsed) {
-          console.log(`    Tokens used: ${chalk.dim(String(response.tokensUsed))}`);
+          const total = response.tokensUsed.input + response.tokensUsed.output;
+          console.log(`    Tokens used: ${chalk.dim(total.toLocaleString())}`);
         }
         console.log();
       } catch (error) {

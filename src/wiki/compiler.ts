@@ -328,7 +328,7 @@ export class WikiCompiler {
       maxTokens: 8192,
     });
 
-    stats.tokensUsed += response.tokensUsed ?? 0;
+    stats.tokensUsed += response.tokensUsed ? (response.tokensUsed.input + response.tokensUsed.output) : 0;
 
     return this.parseCompilationResponse(response.content);
   }
@@ -443,7 +443,7 @@ export class WikiCompiler {
       maxTokens: 8192,
     });
 
-    stats.tokensUsed += response.tokensUsed ?? 0;
+    stats.tokensUsed += response.tokensUsed ? (response.tokensUsed.input + response.tokensUsed.output) : 0;
 
     const parsed = this.parseCompilationResponse(response.content);
 
@@ -479,7 +479,7 @@ export class WikiCompiler {
       maxTokens: 8192,
     });
 
-    stats.tokensUsed += response.tokensUsed ?? 0;
+    stats.tokensUsed += response.tokensUsed ? (response.tokensUsed.input + response.tokensUsed.output) : 0;
 
     const parsed = this.parseCompilationResponse(response.content);
 
@@ -517,7 +517,7 @@ export class WikiCompiler {
           maxTokens: 4096,
         });
 
-        stats.tokensUsed += repoResponse.tokensUsed ?? 0;
+        stats.tokensUsed += repoResponse.tokensUsed ? (repoResponse.tokensUsed.input + repoResponse.tokensUsed.output) : 0;
 
         const repoParsed = this.parseCompilationResponse(
           repoResponse.content

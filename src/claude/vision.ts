@@ -6,6 +6,8 @@ import { existsSync } from "node:fs";
  * Process an image using Claude's vision capabilities.
  * Extracts text descriptions suitable for inclusion in wiki pages.
  *
+ * Uses the Anthropic SDK with native base64 image support.
+ *
  * @param imagePath - Absolute path to the image file
  * @param context - Additional context about what the image represents
  * @returns Text description of the image content
@@ -18,14 +20,7 @@ export async function processImage(
     throw new Error(`Image not found: ${imagePath}`);
   }
 
-  const client = new ClaudeClient();
-
-  const available = await client.isAvailable();
-  if (!available) {
-    throw new Error(
-      "Claude CLI is not available. Install it to enable vision processing."
-    );
-  }
+  const client = new ClaudeClient("claude-haiku-3.5-20241022"); // Vision on cheap model
 
   const prompt = buildVisionPrompt(context);
 

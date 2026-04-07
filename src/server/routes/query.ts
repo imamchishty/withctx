@@ -76,7 +76,7 @@ export async function registerQueryRoutes(
           page: page.path,
           relevance: 1 - idx * 0.1, // Simple decreasing relevance
         })),
-        tokenCount: response.tokensUsed ?? 0,
+        tokenCount: response.tokensUsed ? (response.tokensUsed.input + response.tokensUsed.output) : 0,
       };
 
       return result;
