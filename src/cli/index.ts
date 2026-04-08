@@ -33,6 +33,7 @@ import { registerExplainCommand } from "./commands/explain.js";
 import { registerChangelogCommand } from "./commands/changelog.js";
 import { registerTimelineCommand } from "./commands/timeline.js";
 import { registerMetricsCommand } from "./commands/metrics.js";
+import { registerFaqCommand } from "./commands/faq.js";
 
 // Global verbosity state — commands can import and check this
 export const globalState = {
@@ -91,5 +92,6 @@ registerExplainCommand(program);
 registerChangelogCommand(program);
 registerTimelineCommand(program);
 registerMetricsCommand(program);
+registerFaqCommand(program);
 
 program.parse(process.argv);

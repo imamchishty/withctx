@@ -32,6 +32,7 @@ export function formatCostReport(tracker: CostTracker): string {
     "add",
     "lint",
     "chat",
+    "faq",
   ];
 
   for (const op of operations) {

@@ -8,7 +8,8 @@ export type OperationType =
   | "lint"
   | "chat"
   | "review"
-  | "explain";
+  | "explain"
+  | "faq";
 
 export interface TokenUsage {
   inputTokens: number;
@@ -182,6 +183,7 @@ export class CostTracker {
       chat: { count: 0, cost: 0, tokens: 0 },
       review: { count: 0, cost: 0, tokens: 0 },
       explain: { count: 0, cost: 0, tokens: 0 },
+      faq: { count: 0, cost: 0, tokens: 0 },
     };
 
     if (!month) return breakdown;
