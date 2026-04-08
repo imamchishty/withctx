@@ -3,13 +3,37 @@
   "version": "0.1.0",
   "description": "Compiled context layer for AI agents — Claude compiles your project knowledge into a living wiki",
   "license": "MIT",
-  "author": "withctx",
+  "author": "Imam Chishty",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/imamchishty/withctx"
+  },
+  "homepage": "https://github.com/imamchishty/withctx",
+  "keywords": [
+    "claude",
+    "ai",
+    "agents",
+    "wiki",
+    "context",
+    "knowledge",
+    "llm",
+    "documentation",
+    "jira",
+    "confluence",
+    "teams",
+    "onboarding"
+  ],
   "type": "module",
   "bin": {
     "ctx": "./dist/cli/index.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
@@ -19,6 +43,7 @@
     "test:bdd": "cucumber-js",
     "lint": "eslint src/",
     "clean": "rm -rf dist/",
+    "prepublishOnly": "npm run clean && npm run build",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
