@@ -1,6 +1,6 @@
 # Sources
 
-withctx connects to nine source types. Each connector reads data from its source, caches it locally in `.ctx/sources/`, and feeds it to Claude for wiki compilation.
+withctx connects to thirteen source types. Each connector reads data from its source, caches it locally in `.ctx/sources/`, and feeds it to Claude for wiki compilation.
 
 ## Overview
 
@@ -15,6 +15,10 @@ withctx connects to nine source types. Each connector reads data from its source
 | Jira | `jira` | `JIRA_EMAIL` + `JIRA_TOKEN` | Issues, epics, components, labels |
 | Confluence | `confluence` | `CONFLUENCE_EMAIL` + `CONFLUENCE_TOKEN` | Pages, page trees, spaces |
 | Microsoft Teams | `teams` | `TEAMS_*` credentials | Messages, threads, meeting transcripts |
+| SharePoint | `sharepoint` | `TEAMS_*` credentials | Word, Excel, PPT, PDF from SharePoint sites |
+| CI/CD | `cicd` | `GITHUB_TOKEN` | Build runs, success rates, failure analysis |
+| Test Coverage | `coverage` | No | lcov, istanbul, cobertura coverage reports |
+| Pull Requests | `pull-requests` | `GITHUB_TOKEN` | Merged PRs, reviewers, files changed, activity |
 
 ---
 
@@ -445,6 +449,142 @@ Teams channels are noisy. The noise filter ensures withctx only ingests substant
 - Pure reaction messages (thumbs up, etc.) are skipped
 - System messages (member joined, meeting started) are skipped
 - Duplicate messages (cross-posted) are deduplicated
+
+---
+
+## SharePoint / OneDrive
+
+Fetches Word, Excel, PowerPoint, and PDF documents from SharePoint sites or OneDrive. Uses the same Microsoft Graph API as Teams — if you've set up Teams, SharePoint works with the same credentials.
+
+### Configuration
+
+```yaml
+sources:
+  sharepoint:
+    - name: engineering-docs
+      site: acme.sharepoint.com/sites/engineering
+      paths:
+        - /Shared Documents/Architecture/
+        - /Shared Documents/Runbooks/
+      filetypes: [docx, xlsx, pptx, pdf, md]
+
+    - name: specific-files
+      site: acme.sharepoint.com/sites/engineering
+      files:
+        - /Shared Documents/team-roster.xlsx
+        - /Shared Documents/Q4 Roadmap.pptx
+```
+
+### Authentication
+
+Same as Teams — uses Microsoft Graph API:
+
+```bash
+# .env (same credentials as Teams)
+TEAMS_TENANT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+TEAMS_CLIENT_ID=xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+TEAMS_CLIENT_SECRET=xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+Add `Sites.Read.All` permission to your Azure AD app (in addition to the Teams permissions).
+
+### What Gets Ingested
+
+- Documents are downloaded, parsed by file type (Word → text, Excel → tables, etc.)
+- Cached locally in `.ctx/sources/sharepoint/`
+- Incremental sync: only re-downloads files changed since last sync
+- Wiki pages generated: content merged into relevant topic pages
+
+---
+
+## CI/CD (GitHub Actions)
+
+Fetches build/deploy history from GitHub Actions. Gives the wiki insight into build health, deploy frequency, and common failures.
+
+### Configuration
+
+```yaml
+sources:
+  cicd:
+    - name: api-builds
+      provider: github-actions
+      repo: acme/api-service
+```
+
+### Authentication
+
+```bash
+# .env
+GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
+```
+
+### What Gets Ingested
+
+- Workflow run results (success, failure, cancelled)
+- Build duration and timing
+- Failed job details and step logs
+- Summary statistics: success rate, avg build time, deploy frequency
+- Wiki pages generated: `repos/api-service/ci.md`
+
+---
+
+## Test Coverage
+
+Reads coverage reports and adds testing insights to the wiki. Supports lcov, istanbul JSON, and cobertura formats.
+
+### Configuration
+
+```yaml
+sources:
+  coverage:
+    - name: api-coverage
+      path: ./coverage/lcov.info
+      format: lcov                     # lcov | istanbul-json | cobertura
+```
+
+### Authentication
+
+None — reads local files.
+
+### What Gets Ingested
+
+- Per-file line/branch/function coverage percentages
+- Per-directory breakdown
+- Bottom 10 files (lowest coverage) and top 10 files
+- Overall project coverage metrics
+- Wiki pages generated: `repos/api-service/testing.md`
+
+---
+
+## Pull Requests
+
+Fetches merged PR data to understand recent changes, review patterns, and team activity.
+
+### Configuration
+
+```yaml
+sources:
+  pull-requests:
+    - name: api-prs
+      repo: acme/api-service
+      include: merged                  # merged | open | all
+      since: 30d                       # duration or date
+```
+
+### Authentication
+
+```bash
+# .env
+GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
+```
+
+### What Gets Ingested
+
+- PR title, description, author, reviewers
+- Files changed per PR with additions/deletions
+- Review comments and approval status
+- Activity summary: PRs per week, avg review time, most active contributors
+- Wiki pages generated: `repos/api-service/recent-changes.md`
 
 ---
 
