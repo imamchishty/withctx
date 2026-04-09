@@ -2,6 +2,7 @@ import type { SourceConnector } from "./types.js";
 import type { RawDocument, FetchOptions, SourceStatus } from "../types/source.js";
 import type { ConfluenceSource } from "../types/config.js";
 import { resilientFetch } from "./resilient-fetch.js";
+import { processMarkdown, detectDocType } from "./markdown-processor.js";
 
 interface ConfluencePage {
   id: string;
@@ -61,7 +62,7 @@ export class ConfluenceConnector implements SourceConnector {
   private baseUrl: string;
   private email?: string;
   private token: string;
-  private space?: string;
+  private spaces: string[];
   private pages?: Array<{ id?: string; url?: string }>;
   private label?: string;
   private parent?: string;
@@ -76,7 +77,10 @@ export class ConfluenceConnector implements SourceConnector {
     this.baseUrl = config.base_url.replace(/\/$/, "");
     this.email = config.email;
     this.token = config.token;
-    this.space = config.space;
+    // Support both single space string and array of spaces
+    this.spaces = config.space
+      ? Array.isArray(config.space) ? config.space : [config.space]
+      : [];
     this.pages = config.pages;
     this.label = config.label;
     this.parent = config.parent;
@@ -141,12 +145,25 @@ export class ConfluenceConnector implements SourceConnector {
         }
       }
 
-      // Strategy 3: Fetch by space / label via CQL search
-      if ((this.space || this.label) && !this.parent && !(this.pages && this.pages.length > 0)) {
-        for await (const doc of this.fetchByCql(options)) {
-          count++;
-          yield doc;
-          if (options?.limit && count >= options.limit) break;
+      // Strategy 3: Fetch by space(s) / label via CQL search
+      if ((this.spaces.length > 0 || this.label) && !this.parent && !(this.pages && this.pages.length > 0)) {
+        if (this.spaces.length > 0) {
+          // Iterate over each space
+          for (const space of this.spaces) {
+            if (options?.limit && count >= options.limit) break;
+            for await (const doc of this.fetchByCql(options, space)) {
+              count++;
+              yield doc;
+              if (options?.limit && count >= options.limit) break;
+            }
+          }
+        } else {
+          // Label-only search (no space filter)
+          for await (const doc of this.fetchByCql(options)) {
+            count++;
+            yield doc;
+            if (options?.limit && count >= options.limit) break;
+          }
         }
       }
 
@@ -209,12 +226,12 @@ export class ConfluenceConnector implements SourceConnector {
     }
   }
 
-  private async *fetchByCql(options?: FetchOptions): AsyncGenerator<RawDocument> {
+  private async *fetchByCql(options?: FetchOptions, space?: string): AsyncGenerator<RawDocument> {
     const cqlParts: string[] = [];
     cqlParts.push("type = page");
 
-    if (this.space) {
-      cqlParts.push(`space = "${this.space}"`);
+    if (space) {
+      cqlParts.push(`space = "${space}"`);
     }
     if (this.label) {
       cqlParts.push(`label = "${this.label}"`);
@@ -267,6 +284,10 @@ export class ConfluenceConnector implements SourceConnector {
       ? `${this.baseUrl}${page._links.webui}`
       : undefined;
 
+    // Run converted markdown through the processor for doc type detection + sectioning
+    const processed = processMarkdown(page.title + ".md", markdownContent, ".");
+    const docType = processed.metadata.docType;
+
     return {
       id: `confluence:${this.name}:${page.id}`,
       sourceType: "confluence",
@@ -280,9 +301,12 @@ export class ConfluenceConnector implements SourceConnector {
       updatedAt: page.version?.when,
       metadata: {
         pageId: page.id,
-        spaceKey: this.space,
         labels,
         version: page.version?.number,
+        docType,
+        sectionsCount: processed.sections.length,
+        sections: processed.sections.map(s => s.heading).filter(Boolean),
+        crossReferences: processed.crossReferences.map(r => r.rawPath),
         imageReferences: imageRefs.length > 0 ? imageRefs : undefined,
         hasAttachments: (page.children?.attachment?.results?.length || 0) > 0,
         attachmentCount: page.children?.attachment?.results?.length || 0,

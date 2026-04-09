@@ -30,7 +30,7 @@ const ConfluenceSourceSchema = z.object({
   base_url: z.string().url(),
   email: z.string().email().optional(),
   token: z.string(),
-  space: z.string().optional(),
+  space: z.union([z.string(), z.array(z.string())]).optional(),
   pages: z
     .array(
       z.object({

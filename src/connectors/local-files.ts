@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
 import { join, relative, extname, basename } from "node:path";
 import type { SourceConnector } from "./types.js";
 import type { RawDocument, FetchOptions, SourceStatus } from "../types/source.js";
+import { processMarkdown } from "./markdown-processor.js";
 
 const TEXT_EXTENSIONS = new Set([
   ".md", ".txt", ".rst", ".adoc",
@@ -77,22 +78,49 @@ export class LocalFilesConnector implements SourceConnector {
         const content = readFileSync(filePath, "utf-8");
         const relativePath = relative(this.basePath, filePath);
 
-        count++;
-        yield {
-          id: `local:${this.name}:${relativePath}`,
-          sourceType: "local",
-          sourceName: this.name,
-          title: relativePath,
-          content,
-          contentType: this.isCode(ext) ? "code" : "text",
-          createdAt: stat.birthtime.toISOString(),
-          updatedAt: stat.mtime.toISOString(),
-          metadata: {
-            path: relativePath,
-            extension: ext,
-            size: stat.size,
-          },
-        };
+        // Process markdown files through the smart parser
+        if (ext === ".md") {
+          const processed = processMarkdown(relativePath, content, this.basePath);
+          count++;
+          yield {
+            id: `local:${this.name}:${relativePath}`,
+            sourceType: "local",
+            sourceName: this.name,
+            title: processed.metadata.title,
+            content,
+            contentType: "text",
+            author: processed.metadata.author,
+            createdAt: stat.birthtime.toISOString(),
+            updatedAt: stat.mtime.toISOString(),
+            metadata: {
+              path: relativePath,
+              extension: ext,
+              size: stat.size,
+              docType: processed.metadata.docType,
+              tags: processed.metadata.tags,
+              sectionsCount: processed.sections.length,
+              crossReferences: processed.crossReferences.map((ref) => ref.targetPath),
+              frontmatter: processed.metadata.custom,
+            },
+          };
+        } else {
+          count++;
+          yield {
+            id: `local:${this.name}:${relativePath}`,
+            sourceType: "local",
+            sourceName: this.name,
+            title: relativePath,
+            content,
+            contentType: this.isCode(ext) ? "code" : "text",
+            createdAt: stat.birthtime.toISOString(),
+            updatedAt: stat.mtime.toISOString(),
+            metadata: {
+              path: relativePath,
+              extension: ext,
+              size: stat.size,
+            },
+          };
+        }
 
         if (options?.limit && count >= options.limit) break;
       }
