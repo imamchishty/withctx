@@ -363,6 +363,34 @@ sources:
     max_pages: 200                    # Limit per space
 ```
 
+### Multiple Spaces (v1.3.0+)
+
+You can pull from multiple Confluence spaces in a single source using the `space` field as an array:
+
+```yaml
+# Multiple spaces
+sources:
+  - type: confluence
+    name: all-docs
+    config:
+      base_url: https://yourco.atlassian.net
+      email: you@company.com
+      token: ${CONFLUENCE_TOKEN}
+      space: [ENG, PLATFORM, DEVOPS, SECURITY]
+```
+
+Both forms work — a single string for one space, or an array for multiple:
+
+```yaml
+# Single space (original syntax)
+space: ENG
+
+# Multiple spaces (array syntax)
+space: [ENG, PLATFORM, DEVOPS, SECURITY]
+```
+
+Each space is queried independently and all pages are merged into the same source for wiki compilation.
+
 ### Authentication
 
 ```bash

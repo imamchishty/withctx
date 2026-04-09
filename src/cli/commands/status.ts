@@ -1,22 +1,72 @@
 import { Command } from "commander";
 import chalk from "chalk";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { join, basename } from "node:path";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
+import { processMarkdown, type DocType } from "../../connectors/markdown-processor.js";
 
-interface SyncState {
-  sources: Record<string, { lastSyncAt: string; itemCount: number }>;
+// ── Box-drawing helpers ───────────────────────────────────────────────
+
+const BOX = {
+  topLeft: "\u250C",
+  topRight: "\u2510",
+  bottomLeft: "\u2514",
+  bottomRight: "\u2518",
+  horizontal: "\u2500",
+  vertical: "\u2502",
+  teeLeft: "\u251C",
+  teeRight: "\u2524",
+};
+
+function boxTop(width: number): string {
+  return BOX.topLeft + BOX.horizontal.repeat(width) + BOX.topRight;
 }
 
-function loadSyncState(ctxDir: CtxDirectory): SyncState | null {
-  const statePath = join(ctxDir.path, "sync-state.json");
-  if (existsSync(statePath)) {
-    return JSON.parse(readFileSync(statePath, "utf-8")) as SyncState;
-  }
-  return null;
+function boxBottom(width: number): string {
+  return BOX.bottomLeft + BOX.horizontal.repeat(width) + BOX.bottomRight;
 }
+
+function boxDivider(width: number): string {
+  return BOX.teeLeft + BOX.horizontal.repeat(width) + BOX.teeRight;
+}
+
+function boxLine(content: string, width: number): string {
+  const stripped = stripAnsi(content);
+  const padding = Math.max(0, width - stripped.length);
+  return BOX.vertical + " " + content + " ".repeat(padding) + " " + BOX.vertical;
+}
+
+function stripAnsi(str: string): string {
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/\u001B\[[0-9;]*m/g, "");
+}
+
+// ── Progress bar helper ───────────────────────────────────────────────
+
+function progressBar(filled: number, total: number, width: number = 16): string {
+  if (total === 0) return "\u2591".repeat(width);
+  const ratio = Math.min(filled / total, 1);
+  const filledCount = Math.round(ratio * width);
+  return "\u2588".repeat(filledCount) + "\u2591".repeat(width - filledCount);
+}
+
+// ── Freshness scoring (inline to avoid dependency on RawDocument) ─────
+
+type FreshnessCategory = "fresh" | "aging" | "stale" | "unknown";
+
+function categorizeFreshness(updatedAt: string): FreshnessCategory {
+  const date = new Date(updatedAt);
+  if (isNaN(date.getTime())) return "unknown";
+  const diffMs = Date.now() - date.getTime();
+  const days = Math.floor(diffMs / 86_400_000);
+  if (days < 7) return "fresh";
+  if (days <= 30) return "aging";
+  return "stale";
+}
+
+// ── Relative time formatting ──────────────────────────────────────────
 
 function formatRelativeTime(dateStr: string): string {
   const date = new Date(dateStr);
@@ -32,11 +82,64 @@ function formatRelativeTime(dateStr: string): string {
   return `${diffDays}d ago`;
 }
 
+// ── Sync state loading ────────────────────────────────────────────────
+
+interface SyncState {
+  sources: Record<string, { lastSyncAt: string; itemCount: number }>;
+}
+
+function loadSyncState(ctxDir: CtxDirectory): SyncState | null {
+  const statePath = join(ctxDir.path, "sync-state.json");
+  if (existsSync(statePath)) {
+    return JSON.parse(readFileSync(statePath, "utf-8")) as SyncState;
+  }
+  return null;
+}
+
+// ── Known doc types for coverage analysis ─────────────────────────────
+
+const ALL_DOC_TYPES: DocType[] = [
+  "architecture",
+  "deployment",
+  "api",
+  "database",
+  "onboarding",
+  "testing",
+  "security",
+  "incident",
+  "dependencies",
+  "roadmap",
+  "changelog",
+  "persona",
+  "repo-structure",
+  "feature-flags",
+];
+
+// ── JSON output structure ─────────────────────────────────────────────
+
+interface StatusJson {
+  pages: number;
+  words: number;
+  sources: number;
+  lastSync: string | null;
+  freshness: {
+    fresh: number;
+    aging: number;
+    stale: number;
+    unknown: number;
+  };
+  coverage: Record<string, number>;
+  gaps: string[];
+}
+
+// ── Command registration ──────────────────────────────────────────────
+
 export function registerStatusCommand(program: Command): void {
   program
     .command("status")
-    .description("Show wiki health: page counts, source freshness, and overall status")
-    .action(async () => {
+    .description("Wiki health dashboard — pages, freshness, coverage gaps, and sources")
+    .option("--format <format>", "Output format: dashboard (default) or json", "dashboard")
+    .action(async (opts: { format: string }) => {
       try {
         const config = loadConfig();
         const projectRoot = getProjectRoot();
@@ -51,130 +154,199 @@ export function registerStatusCommand(program: Command): void {
         const allPages = pageManager.list();
         const syncState = loadSyncState(ctxDir);
 
-        // Header
-        console.log();
-        console.log(chalk.bold.cyan(`withctx status — ${config.project}`));
-        console.log(chalk.dim("─".repeat(50)));
+        // ── Gather metrics ──────────────────────────────────────────
 
-        // Page catalog
-        console.log();
-        console.log(chalk.bold("Pages:"));
+        let totalWords = 0;
+        const freshness: Record<FreshnessCategory, number> = {
+          fresh: 0,
+          aging: 0,
+          stale: 0,
+          unknown: 0,
+        };
+        const coverageMap: Record<string, number> = {};
 
-        const categories: Record<string, string[]> = {};
-        for (const page of allPages) {
-          const parts = page.split("/");
-          const category = parts.length > 1 ? parts[0] : "root";
-          if (!categories[category]) categories[category] = [];
-          categories[category].push(page);
+        // Initialize coverage map with all known doc types
+        for (const dt of ALL_DOC_TYPES) {
+          coverageMap[dt] = 0;
         }
 
-        let totalPages = 0;
-        for (const [category, pages] of Object.entries(categories)) {
+        for (const pagePath of allPages) {
+          const page = pageManager.read(pagePath);
+          if (!page) continue;
+
+          // Word count
+          const words = page.content
+            .replace(/[#|_`*\->\[\](){}]/g, " ")
+            .split(/\s+/)
+            .filter(Boolean).length;
+          totalWords += words;
+
+          // Freshness
+          const cat = categorizeFreshness(page.updatedAt);
+          freshness[cat]++;
+
+          // Doc type coverage
+          const processed = processMarkdown(pagePath, page.content, ctxDir.contextPath);
+          const docType = processed.metadata.docType;
+          if (docType !== "general") {
+            coverageMap[docType] = (coverageMap[docType] ?? 0) + 1;
+          }
+        }
+
+        // Sources
+        const sourcesList: Array<{ name: string; type: string }> = [];
+        if (config.sources) {
+          const sourceKeys = Object.keys(config.sources) as Array<keyof typeof config.sources>;
+          for (const key of sourceKeys) {
+            const arr = config.sources[key];
+            if (Array.isArray(arr)) {
+              for (const s of arr) {
+                if (typeof s === "object" && s !== null && "name" in s) {
+                  sourcesList.push({ name: (s as { name: string }).name, type: key });
+                }
+              }
+            }
+          }
+        }
+
+        // Last sync
+        let lastSyncTime: string | null = null;
+        if (syncState) {
+          for (const state of Object.values(syncState.sources)) {
+            if (!lastSyncTime || new Date(state.lastSyncAt) > new Date(lastSyncTime)) {
+              lastSyncTime = state.lastSyncAt;
+            }
+          }
+        }
+
+        // Coverage gaps
+        const gaps = ALL_DOC_TYPES.filter((dt) => (coverageMap[dt] ?? 0) === 0);
+
+        // ── JSON output ─────────────────────────────────────────────
+
+        if (opts.format === "json") {
+          const output: StatusJson = {
+            pages: allPages.length,
+            words: totalWords,
+            sources: sourcesList.length,
+            lastSync: lastSyncTime,
+            freshness,
+            coverage: coverageMap,
+            gaps,
+          };
+          console.log(JSON.stringify(output, null, 2));
+          return;
+        }
+
+        // ── Dashboard output ────────────────────────────────────────
+
+        const W = 50; // inner width (between box borders)
+
+        console.log();
+        console.log("  " + boxTop(W));
+
+        // Title
+        console.log("  " + boxLine(chalk.bold.cyan("withctx Wiki Status"), W));
+
+        // Summary
+        console.log("  " + boxDivider(W));
+        const pagesStr = `Pages: ${chalk.bold(String(allPages.length))}`;
+        const wordsStr = `Words: ${chalk.bold(totalWords.toLocaleString())}`;
+        console.log("  " + boxLine(`${pagesStr}        ${wordsStr}`, W));
+
+        const sourcesStr = `Sources: ${chalk.bold(String(sourcesList.length))}`;
+        const syncStr = lastSyncTime
+          ? `Last sync: ${chalk.green(formatRelativeTime(lastSyncTime))}`
+          : `Last sync: ${chalk.yellow("never")}`;
+        console.log("  " + boxLine(`${sourcesStr}     ${syncStr}`, W));
+
+        // Freshness
+        console.log("  " + boxDivider(W));
+        console.log("  " + boxLine(chalk.bold("Freshness"), W));
+
+        const totalPages = allPages.length || 1;
+        const freshPct = Math.round((freshness.fresh / totalPages) * 100);
+        const agingPct = Math.round((freshness.aging / totalPages) * 100);
+        const stalePct = Math.round((freshness.stale / totalPages) * 100);
+
+        console.log(
+          "  " +
+            boxLine(
+              `${chalk.green(progressBar(freshness.fresh, totalPages))}  Fresh: ${freshness.fresh} (${freshPct}%)`,
+              W
+            )
+        );
+        console.log(
+          "  " +
+            boxLine(
+              `${chalk.yellow(progressBar(freshness.aging, totalPages))}  Aging: ${freshness.aging} (${agingPct}%)`,
+              W
+            )
+        );
+        console.log(
+          "  " +
+            boxLine(
+              `${chalk.red(progressBar(freshness.stale, totalPages))}  Stale: ${freshness.stale} (${stalePct}%)`,
+              W
+            )
+        );
+        if (freshness.unknown > 0) {
+          const unknownPct = Math.round((freshness.unknown / totalPages) * 100);
           console.log(
-            `  ${chalk.cyan(category)}: ${chalk.bold(String(pages.length))} page(s)`
+            "  " +
+              boxLine(
+                `${chalk.dim(progressBar(freshness.unknown, totalPages))}  Unknown: ${freshness.unknown} (${unknownPct}%)`,
+                W
+              )
           );
-          totalPages += pages.length;
-        }
-        console.log(chalk.dim(`  Total: ${totalPages} pages`));
-
-        // Source freshness
-        console.log();
-        console.log(chalk.bold("Sources:"));
-
-        const sources: Array<{ name: string; type: string }> = [];
-        if (config.sources?.local) {
-          for (const s of config.sources.local) sources.push({ name: s.name, type: "local" });
-        }
-        if (config.sources?.jira) {
-          for (const s of config.sources.jira) sources.push({ name: s.name, type: "jira" });
-        }
-        if (config.sources?.confluence) {
-          for (const s of config.sources.confluence) sources.push({ name: s.name, type: "confluence" });
-        }
-        if (config.sources?.github) {
-          for (const s of config.sources.github) sources.push({ name: s.name, type: "github" });
-        }
-        if (config.sources?.teams) {
-          for (const s of config.sources.teams) sources.push({ name: s.name, type: "teams" });
         }
 
-        if (sources.length === 0) {
-          console.log(chalk.dim("  No sources configured"));
-        } else {
-          for (const source of sources) {
-            const state = syncState?.sources[source.name];
-            const lastSync = state
-              ? chalk.green(formatRelativeTime(state.lastSyncAt))
-              : chalk.yellow("never synced");
-            const items = state ? chalk.dim(`(${state.itemCount} items)`) : "";
+        // Coverage
+        console.log("  " + boxDivider(W));
+        console.log("  " + boxLine(chalk.bold("Coverage"), W));
 
-            console.log(
-              `  ${chalk.cyan(source.name)} [${source.type}] — last sync: ${lastSync} ${items}`
-            );
+        // Display doc types in two-column layout
+        const docTypes = ALL_DOC_TYPES.slice();
+        for (let i = 0; i < docTypes.length; i += 2) {
+          const left = docTypes[i];
+          const right = docTypes[i + 1];
+
+          const leftCount = coverageMap[left] ?? 0;
+          const leftIcon = leftCount > 0 ? chalk.green("\u2705") : chalk.red("\u274C");
+          const leftStr = `${leftIcon} ${left} (${leftCount})`;
+
+          let line = leftStr.padEnd(28);
+          if (right) {
+            const rightCount = coverageMap[right] ?? 0;
+            const rightIcon = rightCount > 0 ? chalk.green("\u2705") : chalk.red("\u274C");
+            line += `${rightIcon} ${right} (${rightCount})`;
           }
+
+          // Need to pad using stripped length because of ANSI codes in emoji
+          console.log("  " + boxLine(line, W));
         }
 
-        // Costs
-        const costs = ctxDir.readCosts();
-        if (costs) {
-          console.log();
-          console.log(chalk.bold("Costs:"));
-          const totalTokens = (costs as Record<string, unknown>)["totalTokens"] as number ?? 0;
-          const totalCost = (costs as Record<string, unknown>)["totalCostUsd"] as number ?? 0;
-          const budget = config.costs?.budget;
-
-          console.log(`  Tokens used:  ${chalk.cyan(totalTokens.toLocaleString())}`);
-          console.log(`  Estimated:    ${chalk.cyan(`$${totalCost.toFixed(4)}`)}`);
-
-          if (budget) {
-            const percentage = (totalCost / budget) * 100;
-            const budgetColor = percentage > 80 ? chalk.red : percentage > 50 ? chalk.yellow : chalk.green;
-            console.log(
-              `  Budget:       ${budgetColor(`$${totalCost.toFixed(2)} / $${budget}`)} (${budgetColor(`${percentage.toFixed(1)}%`)})`
-            );
-          }
+        // Gaps warning
+        if (gaps.length > 0) {
+          console.log("  " + boxDivider(W));
+          const gapList = gaps.join(", ");
+          console.log(
+            "  " +
+              boxLine(
+                chalk.yellow(`Missing: ${gapList}`),
+                W
+              )
+          );
+          console.log(
+            "  " +
+              boxLine(
+                chalk.dim("Consider adding docs for these areas"),
+                W
+              )
+          );
         }
 
-        // Health summary
-        console.log();
-        console.log(chalk.bold("Health:"));
-
-        const healthChecks: Array<{ label: string; ok: boolean; detail: string }> = [];
-
-        // Check: has pages
-        healthChecks.push({
-          label: "Wiki pages",
-          ok: totalPages > 1,
-          detail: totalPages > 1 ? `${totalPages} pages` : "No content — run 'ctx ingest'",
-        });
-
-        // Check: has been synced recently
-        const hasRecentSync = syncState
-          ? Object.values(syncState.sources).some((s) => {
-              const diff = Date.now() - new Date(s.lastSyncAt).getTime();
-              return diff < 7 * 86_400_000; // 7 days
-            })
-          : false;
-        healthChecks.push({
-          label: "Recent sync",
-          ok: hasRecentSync,
-          detail: hasRecentSync ? "Synced within 7 days" : "No recent sync — run 'ctx sync'",
-        });
-
-        // Check: index exists and is non-trivial
-        const indexContent = ctxDir.readPage("index.md") ?? "";
-        const hasGoodIndex = indexContent.length > 100;
-        healthChecks.push({
-          label: "Index",
-          ok: hasGoodIndex,
-          detail: hasGoodIndex ? "Index is populated" : "Index is sparse — run 'ctx ingest'",
-        });
-
-        for (const check of healthChecks) {
-          const icon = check.ok ? chalk.green("ok") : chalk.yellow("--");
-          console.log(`  [${icon}] ${check.label}: ${chalk.dim(check.detail)}`);
-        }
-
+        console.log("  " + boxBottom(W));
         console.log();
       } catch (error) {
         console.error(chalk.red("Status check failed"));

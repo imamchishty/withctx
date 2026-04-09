@@ -3,25 +3,34 @@ import chalk from "chalk";
 import ora from "ora";
 import { readFileSync, writeFileSync } from "node:fs";
 import { parse as parseYaml, stringify as yamlStringify } from "yaml";
-import { loadConfig, findConfigFile, getProjectRoot } from "../../config/loader.js";
-import { LocalFilesConnector } from "../../connectors/local-files.js";
+import { loadConfig, findConfigFile } from "../../config/loader.js";
+import { runInteractiveSourceAdd } from "./sources-interactive.js";
 
-interface SourceAddOptions {
-  type?: string;
-  path?: string;
-  url?: string;
-  token?: string;
-  project?: string;
-  space?: string;
-  owner?: string;
+// ---------------------------------------------------------------------------
+// Config helpers
+// ---------------------------------------------------------------------------
+
+function readRawConfig(configPath: string): Record<string, unknown> {
+  const raw = readFileSync(configPath, "utf-8");
+  return (parseYaml(raw) as Record<string, unknown>) ?? {};
 }
+
+function writeRawConfig(configPath: string, data: Record<string, unknown>): void {
+  writeFileSync(configPath, yamlStringify(data, { lineWidth: 120 }));
+}
+
+// ---------------------------------------------------------------------------
+// The "sources" command group
+// ---------------------------------------------------------------------------
 
 export function registerSourcesCommand(program: Command): void {
   const sourcesCmd = program
     .command("sources")
     .description("Manage source connectors");
 
+  // -------------------------------------------------------------------------
   // ctx sources list
+  // -------------------------------------------------------------------------
   sourcesCmd
     .command("list")
     .description("List all configured sources")
@@ -56,8 +65,11 @@ export function registerSourcesCommand(program: Command): void {
         if (config.sources?.confluence && config.sources.confluence.length > 0) {
           console.log(chalk.bold.cyan("  Confluence:"));
           for (const source of config.sources.confluence) {
+            const spaceLabel = source.space
+              ? Array.isArray(source.space) ? source.space.join(", ") : source.space
+              : "";
             console.log(
-              `    ${chalk.white(source.name)} — ${chalk.dim(source.base_url)}${source.space ? ` [${source.space}]` : ""}`
+              `    ${chalk.white(source.name)} — ${chalk.dim(source.base_url)}${spaceLabel ? ` [${spaceLabel}]` : ""}`
             );
             total++;
           }
@@ -68,6 +80,29 @@ export function registerSourcesCommand(program: Command): void {
           for (const source of config.sources.github) {
             console.log(
               `    ${chalk.white(source.name)} — ${chalk.dim(source.owner)}${source.repo ? `/${source.repo}` : ""}`
+            );
+            total++;
+          }
+        }
+
+        if (config.sources?.slack && config.sources.slack.length > 0) {
+          console.log(chalk.bold.cyan("  Slack:"));
+          for (const source of config.sources.slack) {
+            console.log(
+              `    ${chalk.white(source.name)} — ${chalk.dim(source.channels.join(", "))}`
+            );
+            total++;
+          }
+        }
+
+        if (config.sources?.notion && config.sources.notion.length > 0) {
+          console.log(chalk.bold.cyan("  Notion:"));
+          for (const source of config.sources.notion) {
+            const dbCount = source.database_ids?.length ?? 0;
+            const pageCount = source.page_ids?.length ?? 0;
+            const desc = dbCount > 0 ? `${dbCount} database(s)` : pageCount > 0 ? `${pageCount} page(s)` : "all shared";
+            console.log(
+              `    ${chalk.white(source.name)} — ${chalk.dim(desc)}`
             );
             total++;
           }
@@ -100,128 +135,21 @@ export function registerSourcesCommand(program: Command): void {
       }
     });
 
-  // ctx sources add <name>
+  // -------------------------------------------------------------------------
+  // ctx sources add [type] [path]
+  // -------------------------------------------------------------------------
   sourcesCmd
-    .command("add <name>")
-    .description("Add a new source connector")
-    .option("--type <type>", "Source type: local, jira, confluence, github, teams", "local")
-    .option("--path <path>", "Path for local sources")
-    .option("--url <url>", "Base URL for Jira/Confluence")
-    .option("--token <token>", "API token (or env var reference like ${TOKEN})")
-    .option("--project <project>", "Jira project key")
-    .option("--space <space>", "Confluence space key")
-    .option("--owner <owner>", "GitHub owner/org")
-    .action(async (name: string, options: SourceAddOptions) => {
-      const spinner = ora(`Adding source '${name}'...`).start();
-
-      try {
-        const configPath = findConfigFile();
-        if (!configPath) {
-          spinner.fail(chalk.red("No ctx.yaml found. Run 'ctx init' first."));
-          process.exit(1);
-        }
-
-        const raw = readFileSync(configPath, "utf-8");
-        const configData = parseYaml(raw) as Record<string, unknown>;
-
-        if (!configData.sources) {
-          configData.sources = {};
-        }
-        const sources = configData.sources as Record<string, unknown[]>;
-
-        const type = options.type ?? "local";
-
-        switch (type) {
-          case "local": {
-            const path = options.path ?? `./${name}`;
-            if (!sources.local) sources.local = [];
-            (sources.local as Array<{ name: string; path: string }>).push({ name, path });
-
-            // Validate
-            const connector = new LocalFilesConnector(name, path);
-            const valid = await connector.validate();
-            if (!valid) {
-              spinner.warn(chalk.yellow(`Path '${path}' does not exist yet — source added anyway.`));
-            }
-            break;
-          }
-
-          case "jira": {
-            if (!options.url) {
-              spinner.fail(chalk.red("--url is required for Jira sources"));
-              process.exit(1);
-            }
-            if (!sources.jira) sources.jira = [];
-            (sources.jira as Array<Record<string, unknown>>).push({
-              name,
-              base_url: options.url,
-              token: options.token ?? "${JIRA_TOKEN}",
-              project: options.project,
-            });
-            break;
-          }
-
-          case "confluence": {
-            if (!options.url) {
-              spinner.fail(chalk.red("--url is required for Confluence sources"));
-              process.exit(1);
-            }
-            if (!sources.confluence) sources.confluence = [];
-            (sources.confluence as Array<Record<string, unknown>>).push({
-              name,
-              base_url: options.url,
-              token: options.token ?? "${CONFLUENCE_TOKEN}",
-              space: options.space,
-            });
-            break;
-          }
-
-          case "github": {
-            if (!options.owner) {
-              spinner.fail(chalk.red("--owner is required for GitHub sources"));
-              process.exit(1);
-            }
-            if (!sources.github) sources.github = [];
-            (sources.github as Array<Record<string, unknown>>).push({
-              name,
-              token: options.token ?? "${GITHUB_TOKEN}",
-              owner: options.owner,
-            });
-            break;
-          }
-
-          case "teams": {
-            if (!sources.teams) sources.teams = [];
-            (sources.teams as Array<Record<string, unknown>>).push({
-              name,
-              tenant_id: "${TEAMS_TENANT_ID}",
-              client_id: "${TEAMS_CLIENT_ID}",
-              client_secret: "${TEAMS_CLIENT_SECRET}",
-              channels: [],
-            });
-            spinner.info("Teams source added — update ctx.yaml with tenant credentials and channels.");
-            break;
-          }
-
-          default:
-            spinner.fail(chalk.red(`Unknown source type: ${type}`));
-            process.exit(1);
-        }
-
-        // Write back
-        writeFileSync(configPath, yamlStringify(configData, { lineWidth: 120 }));
-
-        spinner.succeed(chalk.green(`Source '${name}' (${type}) added to ctx.yaml`));
-      } catch (error) {
-        spinner.fail(chalk.red("Failed to add source"));
-        if (error instanceof Error) {
-          console.error(chalk.red(`  ${error.message}`));
-        }
-        process.exit(1);
-      }
+    .command("add [type] [path]")
+    .description(
+      "Interactively add a source (confluence, jira, github, slack, notion, local)"
+    )
+    .action(async (typeArg?: string, pathArg?: string) => {
+      await runInteractiveSourceAdd(typeArg, pathArg);
     });
 
+  // -------------------------------------------------------------------------
   // ctx sources remove <name>
+  // -------------------------------------------------------------------------
   sourcesCmd
     .command("remove <name>")
     .description("Remove a source connector")
@@ -235,8 +163,7 @@ export function registerSourcesCommand(program: Command): void {
           process.exit(1);
         }
 
-        const raw = readFileSync(configPath, "utf-8");
-        const configData = parseYaml(raw) as Record<string, unknown>;
+        const configData = readRawConfig(configPath);
 
         if (!configData.sources) {
           spinner.fail(chalk.red(`Source '${name}' not found.`));
@@ -252,7 +179,6 @@ export function registerSourcesCommand(program: Command): void {
           if (idx !== -1) {
             list.splice(idx, 1);
             found = true;
-            // Clean up empty arrays
             if (list.length === 0) {
               delete sources[type];
             }
@@ -265,7 +191,7 @@ export function registerSourcesCommand(program: Command): void {
           process.exit(1);
         }
 
-        writeFileSync(configPath, yamlStringify(configData, { lineWidth: 120 }));
+        writeRawConfig(configPath, configData);
         spinner.succeed(chalk.green(`Source '${name}' removed from ctx.yaml`));
       } catch (error) {
         spinner.fail(chalk.red("Failed to remove source"));

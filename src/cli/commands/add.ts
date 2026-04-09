@@ -6,6 +6,7 @@ import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
 import { ClaudeClient } from "../../claude/client.js";
+import { runInteractiveSourceAdd, SOURCE_TYPE_NAMES } from "./sources-interactive.js";
 
 type NoteType = "note" | "decision" | "convention" | "context" | "correction";
 
@@ -18,8 +19,8 @@ interface AddOptions {
 export function registerAddCommand(program: Command): void {
   program
     .command("add")
-    .description("Add a note, decision, convention, or correction to the wiki")
-    .argument("[text...]", "Text to add (or use --file)")
+    .description("Add a note, decision, convention, or correction to the wiki — or 'ctx add <source-type>' to add a source")
+    .argument("[text...]", "Text to add (or use --file). Use a source type name (confluence, jira, github, slack, notion, local) to add a source.")
     .option("--file <path>", "Read content from a file")
     .option(
       "--type <type>",
@@ -28,6 +29,17 @@ export function registerAddCommand(program: Command): void {
     )
     .option("--tag <tag>", "Tag for categorization")
     .action(async (textParts: string[], options: AddOptions) => {
+      // Check if first argument is a source type — delegate to interactive source add
+      if (
+        textParts.length >= 1 &&
+        (SOURCE_TYPE_NAMES as readonly string[]).includes(textParts[0].toLowerCase())
+      ) {
+        const sourceType = textParts[0].toLowerCase();
+        const pathArg = textParts[1]; // e.g. "ctx add local ./my-docs"
+        await runInteractiveSourceAdd(sourceType, pathArg);
+        return;
+      }
+
       const spinner = ora("Processing...").start();
 
       try {
