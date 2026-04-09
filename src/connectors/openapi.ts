@@ -3,6 +3,7 @@ import { parse as parseYaml } from "yaml";
 import type { SourceConnector } from "./types.js";
 import type { RawDocument, FetchOptions, SourceStatus } from "../types/source.js";
 import type { OpenApiSource } from "../types/config.js";
+import { resilientFetch } from "./resilient-fetch.js";
 
 // --- Minimal OpenAPI type definitions ---
 
@@ -154,7 +155,7 @@ export class OpenApiConnector implements SourceConnector {
           return false;
         }
       } else if (this.specUrl) {
-        const response = await fetch(this.specUrl, { method: "HEAD" });
+        const response = await resilientFetch(this.specUrl, { method: "HEAD" });
         if (!response.ok) {
           this.status.status = "error";
           this.status.error = `URL returned HTTP ${response.status}: ${this.specUrl}`;
@@ -241,7 +242,7 @@ export class OpenApiConnector implements SourceConnector {
     if (this.specPath) {
       raw = await readFile(this.specPath, "utf-8");
     } else if (this.specUrl) {
-      const response = await fetch(this.specUrl);
+      const response = await resilientFetch(this.specUrl);
       if (!response.ok) {
         throw new Error(`Failed to fetch spec from ${this.specUrl}: HTTP ${response.status}`);
       }

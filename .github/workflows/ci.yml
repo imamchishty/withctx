@@ -29,7 +29,6 @@ jobs:
 
       - name: Run tests
         run: npm test
-        continue-on-error: true
 
       - name: Type check
         run: npx tsc --noEmit

@@ -1,6 +1,7 @@
 import type { SourceConnector } from "./types.js";
 import type { RawDocument, FetchOptions, SourceStatus } from "../types/source.js";
 import type { ConfluenceSource } from "../types/config.js";
+import { resilientFetch } from "./resilient-fetch.js";
 
 interface ConfluencePage {
   id: string;
@@ -438,6 +439,6 @@ export class ConfluenceConnector implements SourceConnector {
       headers["Authorization"] = `Bearer ${this.token}`;
     }
 
-    return fetch(url, { headers });
+    return resilientFetch(url, { headers });
   }
 }

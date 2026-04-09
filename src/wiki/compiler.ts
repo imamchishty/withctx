@@ -13,6 +13,8 @@ import {
 } from "../claude/prompts/compile.js";
 import { formatOnboardingPrompt } from "../claude/prompts/onboard.js";
 import { processImage } from "../claude/vision.js";
+import { runQualityPipeline } from "../quality/index.js";
+import { createAttributions, formatAttributionFooter } from "../quality/attribution.js";
 
 /**
  * Stats returned after a compilation run.
@@ -126,6 +128,22 @@ export class WikiCompiler {
       stats.duration = Date.now() - start;
       return stats;
     }
+
+    // Run quality pipeline — validate, deduplicate, score freshness
+    const { documents: cleanDocs, stats: qualityStats } = runQualityPipeline(docs);
+
+    if (qualityStats.warnings.length > 0) {
+      for (const warning of qualityStats.warnings) {
+        stats.errors.push(`[quality] ${warning}`);
+      }
+    }
+
+    if (cleanDocs.length === 0) {
+      stats.duration = Date.now() - start;
+      return stats;
+    }
+
+    docs = cleanDocs;
 
     // Process images first — convert to text descriptions
     docs = await this.processDocumentImages(docs, stats);
@@ -302,6 +320,14 @@ export class WikiCompiler {
 
       for (const parsed of parsedPages) {
         this.writeParsedPage(parsed, existingPages, stats);
+
+        // Append attribution footer
+        const attribution = createAttributions(parsed.path, batch);
+        const footer = formatAttributionFooter(attribution);
+        const existing = this.pages.read(parsed.path);
+        if (existing) {
+          this.pages.write(parsed.path, existing.content + footer);
+        }
       }
     }
   }

@@ -1,6 +1,7 @@
 import type { SourceConnector } from "./types.js";
 import type { RawDocument, FetchOptions, SourceStatus } from "../types/source.js";
 import type { SlackSource } from "../types/config.js";
+import { resilientFetch } from "./resilient-fetch.js";
 
 interface SlackMessage {
   type: string;
@@ -106,9 +107,9 @@ export class SlackConnector implements SourceConnector {
   private async slackApi(method: string, params?: Record<string, string>): Promise<Record<string, unknown>> {
     const url = new URL(`${SLACK_API}/${method}`);
     if (params) for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
-    const response = await fetch(url.toString(), {
+    const response = await resilientFetch(url.toString(), {
       headers: { Authorization: `Bearer ${this.token}` },
-    });
+    }, { rateLimitHeader: "retry-after" });
     if (!response.ok) throw new Error(`Slack API ${method} returned ${response.status}`);
     return (await response.json()) as Record<string, unknown>;
   }

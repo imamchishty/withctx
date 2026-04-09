@@ -1,6 +1,7 @@
 import type { SourceConnector } from "./types.js";
 import type { RawDocument, FetchOptions, SourceStatus } from "../types/source.js";
 import type { JiraSource } from "../types/config.js";
+import { resilientFetch } from "./resilient-fetch.js";
 
 interface JiraIssue {
   key: string;
@@ -285,6 +286,6 @@ export class JiraConnector implements SourceConnector {
       headers["Authorization"] = `Bearer ${this.token}`;
     }
 
-    return fetch(url, { headers });
+    return resilientFetch(url, { headers });
   }
 }

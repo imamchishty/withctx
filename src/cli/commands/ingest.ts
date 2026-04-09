@@ -1,17 +1,22 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import ora from "ora";
+import { createInterface } from "node:readline";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
 import { ClaudeClient } from "../../claude/client.js";
 import { ConnectorRegistry } from "../../connectors/registry.js";
 import { LocalFilesConnector } from "../../connectors/local-files.js";
+import { safeGenerate } from "../../connectors/safe-generator.js";
+import { progressBar, formatCost, formatTokens, formatDuration } from "../utils/progress.js";
 import type { RawDocument } from "../../types/source.js";
+import type { SourceConnector } from "../../connectors/types.js";
 
 interface IngestOptions {
   maxTokens?: string;
   dryRun?: boolean;
+  yes?: boolean;
 }
 
 /** Model pricing per million tokens (input/output) */
@@ -206,12 +211,92 @@ function trackCostEntry(
   ctxDir.writeCosts(costs);
 }
 
+/** Prompt user for Y/n confirmation via stderr. Returns true if confirmed. */
+async function confirm(message: string): Promise<boolean> {
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  return new Promise((resolve) => {
+    rl.question(message, (answer) => {
+      rl.close();
+      resolve(!answer || answer.toLowerCase().startsWith("y"));
+    });
+  });
+}
+
+/** Classify a document's freshness based on updatedAt. */
+function classifyFreshness(doc: RawDocument): "fresh" | "aging" | "stale" {
+  if (!doc.updatedAt) return "stale";
+  const age = Date.now() - new Date(doc.updatedAt).getTime();
+  const days = age / (1000 * 60 * 60 * 24);
+  if (days <= 7) return "fresh";
+  if (days <= 30) return "aging";
+  return "stale";
+}
+
+/** Detect duplicate documents by title+source. Returns the deduped list and removed count. */
+function deduplicateDocs(docs: RawDocument[]): { unique: RawDocument[]; duplicateCount: number } {
+  const seen = new Set<string>();
+  const unique: RawDocument[] = [];
+  let duplicateCount = 0;
+
+  for (const doc of docs) {
+    const key = `${doc.sourceName}:${doc.title}`;
+    if (seen.has(key)) {
+      duplicateCount++;
+    } else {
+      seen.add(key);
+      unique.push(doc);
+    }
+  }
+
+  return { unique, duplicateCount };
+}
+
+/** Per-source progress state for rendering. */
+interface SourceProgress {
+  name: string;
+  type: string;
+  count: number;
+  total: number | null; // null means unknown total
+  done: boolean;
+  error?: string;
+}
+
+/** Clear N lines above current cursor and rewrite source progress. */
+function renderSourceProgress(sources: SourceProgress[]): void {
+  // Move up and clear previous lines
+  if (sources.length > 0) {
+    process.stderr.write(`\x1b[${sources.length}A`);
+  }
+
+  for (const src of sources) {
+    const label = `  ${chalk.cyan(src.name)} (${src.type})`;
+    const padded = label.padEnd(32);
+
+    let status: string;
+    if (src.error) {
+      status = chalk.red("error");
+    } else if (src.done) {
+      const bar = progressBar(1, 1, 12);
+      status = `${chalk.dim("done")}              ${bar.split("  ")[0]}  ${chalk.bold(String(src.count))} docs`;
+    } else if (src.total !== null && src.total > 0) {
+      const bar = progressBar(src.count, src.total, 12);
+      status = `${String(src.count).padStart(4)}/${src.total} docs    ${bar}`;
+    } else {
+      status = `${chalk.dim("scanning...")}       ${"░".repeat(12)}  ${src.count} docs`;
+    }
+
+    // Clear line and write
+    process.stderr.write(`\x1b[2K${padded}${status}\n`);
+  }
+}
+
 export function registerIngestCommand(program: Command): void {
   program
     .command("ingest")
     .description("Fetch all sources and compile into wiki pages using Claude")
     .option("--max-tokens <n>", "Max tokens for Claude response")
     .option("--dry-run", "Show what would be ingested without calling Claude")
+    .option("-y, --yes", "Skip cost confirmation")
     .action(async (options: IngestOptions) => {
       const spinner = ora("Loading configuration...").start();
 
@@ -236,6 +321,7 @@ export function registerIngestCommand(program: Command): void {
 
         // Validate connectors with helpful error messages
         spinner.text = "Validating source connections...";
+        const validConnectors: SourceConnector[] = [];
         for (const connector of connectors) {
           const valid = await connector.validate();
           if (!valid) {
@@ -243,103 +329,161 @@ export function registerIngestCommand(program: Command): void {
             const helpMsg = getConnectorErrorHelp(connector.type, status.error ?? "Unknown error");
             spinner.warn(chalk.yellow(`Source '${connector.name}' failed validation`));
             console.error(chalk.yellow(helpMsg));
+          } else {
+            validConnectors.push(connector);
           }
         }
 
-        // Fetch all documents
-        spinner.text = "Fetching documents from all sources...";
+        if (validConnectors.length === 0) {
+          spinner.fail(chalk.red("All sources failed validation."));
+          process.exit(1);
+        }
+
+        // Fetch all documents with per-source progress
+        spinner.succeed("Sources validated");
+        console.error();
+
         const allDocuments: RawDocument[] = [];
+        const sourceProgressList: SourceProgress[] = validConnectors.map((c) => ({
+          name: c.name,
+          type: c.type,
+          count: 0,
+          total: null,
+          done: false,
+        }));
 
-        for (const connector of connectors) {
+        // Print initial blank lines for progress rendering
+        for (const _src of sourceProgressList) {
+          process.stderr.write("\n");
+        }
+
+        for (let i = 0; i < validConnectors.length; i++) {
+          const connector = validConnectors[i];
+          const progress = sourceProgressList[i];
+
+          // Check if connector exposes a total count via status
           const status = connector.getStatus();
-          if (status.status === "error") continue;
+          if (status.itemCount && status.itemCount > 0) {
+            progress.total = status.itemCount;
+          }
 
-          spinner.text = `Fetching from ${chalk.cyan(connector.name)}...`;
           try {
-            for await (const doc of connector.fetch()) {
+            for await (const doc of safeGenerate(connector.fetch(), {
+              sourceName: connector.name,
+            })) {
               allDocuments.push(doc);
-              spinner.text = `Fetching from ${chalk.cyan(connector.name)}... (${allDocuments.length} docs)`;
+              progress.count++;
+              renderSourceProgress(sourceProgressList);
             }
+            progress.done = true;
+            renderSourceProgress(sourceProgressList);
           } catch (error) {
-            spinner.warn(
+            progress.error = error instanceof Error ? error.message : String(error);
+            renderSourceProgress(sourceProgressList);
+            console.error(
               chalk.yellow(
-                `Error fetching from ${connector.name}: ${error instanceof Error ? error.message : String(error)}`
+                `\n  Warning: Error fetching from ${connector.name}: ${progress.error}`
               )
             );
           }
         }
 
+        console.error(); // blank line after progress
+
         if (allDocuments.length === 0) {
-          spinner.fail(chalk.red("No documents found across any sources."));
+          console.error(chalk.red("No documents found across any sources."));
           process.exit(1);
         }
 
-        spinner.succeed(`Fetched ${chalk.bold(String(allDocuments.length))} documents from ${connectors.length} source(s)`);
+        // Deduplicate
+        const { unique: uniqueDocs, duplicateCount } = deduplicateDocs(allDocuments);
+
+        console.error(
+          chalk.green(`  Fetched ${chalk.bold(String(allDocuments.length))} documents from ${validConnectors.length} source(s)`) +
+          (duplicateCount > 0 ? chalk.dim(` (${duplicateCount} duplicates removed)`) : "")
+        );
+        console.error();
+
+        // Compute stats shared between dry-run and live run
+        const model = config.costs?.model ?? "claude-sonnet-4";
+        const tokens = estimateTokens(uniqueDocs.map((d) => d.content).join(""));
+        const cost = estimateCost(tokens, model);
+
+        // Freshness breakdown
+        const freshCount = uniqueDocs.filter((d) => classifyFreshness(d) === "fresh").length;
+        const agingCount = uniqueDocs.filter((d) => classifyFreshness(d) === "aging").length;
+        const staleCount = uniqueDocs.filter((d) => classifyFreshness(d) === "stale").length;
+
+        // Get existing pages
+        const pageManager = new PageManager(ctxDir);
+        const existingPages = pageManager.list().filter(
+          (p) => p !== "index.md" && p !== "log.md"
+        );
 
         if (options.dryRun) {
-          const model = config.costs?.model ?? "claude-sonnet-4";
-          const totalChars = allDocuments.reduce((sum, doc) => sum + doc.content.length, 0);
-          const tokens = estimateTokens(allDocuments.map(d => d.content).join(""));
-          const cost = estimateCost(tokens, model);
+          // --- Enhanced dry run preview ---
+          console.error(chalk.bold("  Dry Run Preview"));
+          console.error(chalk.dim("  " + "\u2500".repeat(25)));
+          console.error(`  Sources scanned:    ${chalk.cyan(String(validConnectors.length))}`);
+          console.error(`  Documents found:    ${chalk.cyan(String(uniqueDocs.length))}`);
+          console.error(`  Estimated tokens:   ${chalk.cyan(formatTokens(tokens))}`);
+          console.error(`  Estimated cost:     ${chalk.green(formatCost(cost.total))} ${chalk.dim(`(${model})`)}`);
+          console.error();
+          console.error(chalk.bold("  Quality:"));
+          console.error(`    Fresh (<7d):      ${chalk.green(String(freshCount))} docs`);
+          console.error(`    Aging (7-30d):    ${chalk.yellow(String(agingCount))} docs`);
+          console.error(`    Stale (>30d):     ${chalk.red(String(staleCount))} docs`);
+          if (duplicateCount > 0) {
+            console.error(`    Duplicates:       ${chalk.dim(String(duplicateCount))} removed`);
+          }
+          console.error();
 
-          // Get existing pages for predicted output
-          const pageManager = new PageManager(ctxDir);
-          const existingPages = pageManager.list().filter(
-            (p) => p !== "index.md" && p !== "log.md"
-          );
+          if (existingPages.length > 0) {
+            console.error(chalk.bold("  Existing pages that may be updated:"));
+            for (const page of existingPages) {
+              console.error(`    ${chalk.dim(page)}`);
+            }
+            console.error();
+          }
 
-          console.log();
-          console.log(chalk.bold("=== Dry Run Report ==="));
-          console.log();
-          console.log(chalk.bold("Documents to ingest:"));
-          for (const doc of allDocuments) {
+          // Per-document detail
+          console.error(chalk.bold("  Documents to ingest:"));
+          for (const doc of uniqueDocs) {
             const docTokens = estimateTokens(doc.content);
-            console.log(
-              `  ${chalk.cyan(doc.sourceName)} / ${doc.title}  ${chalk.dim(`(${doc.contentType}, ${doc.content.length} chars, ~${docTokens.toLocaleString()} tokens)`)}`
+            console.error(
+              `    ${chalk.cyan(doc.sourceName)} / ${doc.title}  ${chalk.dim(`(${doc.contentType}, ~${docTokens.toLocaleString()} tokens)`)}`
             );
           }
-          console.log();
-          console.log(chalk.bold("Summary:"));
-          console.log(`  Documents:          ${chalk.cyan(String(allDocuments.length))}`);
-          console.log(`  Total characters:   ${chalk.cyan(totalChars.toLocaleString())}`);
-          console.log(`  Estimated tokens:   ${chalk.cyan(tokens.toLocaleString())}`);
-          console.log(`  Model:              ${chalk.cyan(model)}`);
-          console.log(`  Est. input cost:    ${chalk.green(`$${cost.input.toFixed(4)}`)}`);
-          console.log(`  Est. output cost:   ${chalk.green(`$${cost.output.toFixed(4)}`)}`);
-          console.log(`  Est. total cost:    ${chalk.bold.green(`$${cost.total.toFixed(4)}`)}`);
-          console.log();
-          if (existingPages.length > 0) {
-            console.log(chalk.bold("Existing pages that may be updated:"));
-            for (const page of existingPages) {
-              console.log(`  ${chalk.dim(page)}`);
-            }
-          } else {
-            console.log(chalk.dim("  No existing pages — all pages will be newly created."));
-          }
-          console.log();
-          console.log(chalk.dim("Run without --dry-run to execute."));
+          console.error();
+          console.error(chalk.dim("  Run without --dry-run to compile."));
           return;
+        }
+
+        // --- Cost confirmation (non-dry-run) ---
+        if (!options.yes) {
+          const proceed = await confirm(
+            `  This will use ${formatTokens(tokens)} tokens (${formatCost(cost.total)}). Continue? [Y/n] `
+          );
+          if (!proceed) {
+            console.error(chalk.dim("  Aborted."));
+            return;
+          }
         }
 
         // Check Claude availability
         const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4");
         const available = await claude.isAvailable();
         if (!available) {
-          spinner.fail(
+          console.error(
             chalk.red("Claude CLI not found. Install it: https://docs.anthropic.com/claude-code")
           );
           process.exit(1);
         }
 
-        // Get existing pages for context
-        const pageManager = new PageManager(ctxDir);
-        const existingPages = pageManager.list().filter(
-          (p) => p !== "index.md" && p !== "log.md"
-        );
-
         // Compile with Claude
         const compileSpinner = ora("Compiling wiki pages with Claude...").start();
-        const prompt = buildCompilePrompt(allDocuments, existingPages);
+        const startTime = Date.now();
+        const prompt = buildCompilePrompt(uniqueDocs, existingPages);
 
         const claudeOptions: { maxTokens?: number; systemPrompt: string } = {
           systemPrompt:
@@ -350,6 +494,7 @@ export function registerIngestCommand(program: Command): void {
         }
 
         const response = await claude.prompt(prompt, claudeOptions);
+        const elapsed = Date.now() - startTime;
 
         // Parse the compiled pages
         const compiledPages = parseCompiledPages(response.content);
@@ -359,18 +504,69 @@ export function registerIngestCommand(program: Command): void {
           pageManager.write("compiled-context.md", response.content);
           compileSpinner.succeed("Compiled context saved as compiled-context.md");
         } else {
-          // Write each compiled page
+          // Write each compiled page and track created vs updated
+          const created: string[] = [];
+          const updated: string[] = [];
+          const existingSet = new Set(existingPages);
+
           for (const page of compiledPages) {
+            const existed = existingSet.has(page.path);
             pageManager.write(page.path, page.content);
+            if (existed) {
+              updated.push(page.path);
+            } else {
+              created.push(page.path);
+            }
           }
+
+          const unchanged = existingPages.filter(
+            (p) => !updated.includes(p) && !created.includes(p)
+          );
+
           compileSpinner.succeed(
             `Compiled ${chalk.bold(String(compiledPages.length))} wiki pages`
           );
+
+          // --- Post-ingest diff ---
+          console.error();
+          console.error(chalk.bold("  Ingest complete"));
+          console.error(chalk.dim("  " + "\u2500".repeat(25)));
+
+          if (created.length > 0) {
+            console.error(
+              `  Pages created:   ${chalk.green(String(created.length))}   ${chalk.dim(created.join(", "))}`
+            );
+          }
+          if (updated.length > 0) {
+            console.error(
+              `  Pages updated:   ${chalk.yellow(String(updated.length))}   ${chalk.dim(updated.join(", "))}`
+            );
+          }
+          if (unchanged.length > 0) {
+            console.error(
+              `  Pages unchanged: ${chalk.dim(String(unchanged.length))}`
+            );
+          }
+
+          console.error();
+
+          if (response.tokensUsed) {
+            const totalTokens = response.tokensUsed.input + response.tokensUsed.output;
+            const actualCost = estimateCost(response.tokensUsed.input, model);
+            const outputPricing = MODEL_PRICING[model] ?? MODEL_PRICING["claude-sonnet-4"];
+            const actualOutputCost = (response.tokensUsed.output / 1_000_000) * outputPricing.output;
+            const actualTotalCost = actualCost.input + actualOutputCost;
+            console.error(
+              `  Tokens used:     ${chalk.cyan(totalTokens.toLocaleString())} (${formatCost(actualTotalCost)})`
+            );
+          }
+          console.error(`  Duration:        ${chalk.cyan(formatDuration(elapsed))}`);
+          console.error();
         }
 
         // Update log
         const logContent = ctxDir.readPage("log.md") ?? "";
-        const logEntry = `| ${new Date().toISOString()} | ingest | Ingested ${allDocuments.length} docs, compiled ${compiledPages.length} pages |`;
+        const logEntry = `| ${new Date().toISOString()} | ingest | Ingested ${uniqueDocs.length} docs, compiled ${compiledPages.length} pages |`;
         ctxDir.writePage(
           "log.md",
           logContent + "\n" + logEntry
@@ -381,20 +577,9 @@ export function registerIngestCommand(program: Command): void {
           const total = response.tokensUsed.input + response.tokensUsed.output;
           trackCostEntry(ctxDir, "ingest", total);
         }
-
-        // Summary
-        console.log();
-        console.log(chalk.bold("  Ingest complete:"));
-        console.log(`    Sources processed: ${chalk.cyan(String(connectors.length))}`);
-        console.log(`    Documents fetched: ${chalk.cyan(String(allDocuments.length))}`);
-        console.log(`    Wiki pages created: ${chalk.cyan(String(compiledPages.length))}`);
-        if (response.tokensUsed) {
-          const total = response.tokensUsed.input + response.tokensUsed.output;
-          console.log(`    Tokens used: ${chalk.dim(total.toLocaleString())}`);
-        }
-        console.log();
       } catch (error) {
-        spinner.fail(chalk.red("Ingest failed"));
+        // Ensure spinner is stopped on error
+        console.error(chalk.red("Ingest failed"));
         if (error instanceof Error) {
           console.error(chalk.red(`  ${error.message}`));
         }

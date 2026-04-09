@@ -1,6 +1,7 @@
 import type { SourceConnector } from "./types.js";
 import type { RawDocument, FetchOptions, SourceStatus } from "../types/source.js";
 import type { TeamsSource } from "../types/config.js";
+import { resilientFetch } from "./resilient-fetch.js";
 
 interface GraphToken {
   access_token: string;
@@ -155,7 +156,7 @@ export class TeamsConnector implements SourceConnector {
       grant_type: "client_credentials",
     });
 
-    const response = await fetch(tokenUrl, {
+    const response = await resilientFetch(tokenUrl, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body,
@@ -505,7 +506,7 @@ export class TeamsConnector implements SourceConnector {
     const baseUrl = "https://graph.microsoft.com/v1.0";
     const url = path.startsWith("http") ? path : `${baseUrl}${path}`;
 
-    return fetch(url, {
+    return resilientFetch(url, {
       headers: {
         Authorization: `Bearer ${token}`,
         Accept: "application/json",

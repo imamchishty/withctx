@@ -2,6 +2,7 @@ import type { SourceConnector } from "./types.js";
 import type { RawDocument, FetchOptions, SourceStatus } from "../types/source.js";
 import { writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { join, extname, basename } from "node:path";
+import { resilientFetch } from "./resilient-fetch.js";
 
 interface GraphToken {
   access_token: string;
@@ -193,7 +194,7 @@ export class SharePointConnector implements SourceConnector {
       grant_type: "client_credentials",
     });
 
-    const response = await fetch(tokenUrl, {
+    const response = await resilientFetch(tokenUrl, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString(),
@@ -232,7 +233,7 @@ export class SharePointConnector implements SourceConnector {
       ? `https://graph.microsoft.com/v1.0/sites/${hostname}:/sites/${sitePath}`
       : `https://graph.microsoft.com/v1.0/sites/${hostname}`;
 
-    const response = await fetch(url, {
+    const response = await resilientFetch(url, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
@@ -254,7 +255,7 @@ export class SharePointConnector implements SourceConnector {
     let url = `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${encodedPath}:/children?$top=200`;
 
     while (url) {
-      const response = await fetch(url, {
+      const response = await resilientFetch(url, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
 
@@ -290,7 +291,7 @@ export class SharePointConnector implements SourceConnector {
     const encodedPath = encodeURIComponent(filePath.replace(/^\//, "")).replace(/%2F/g, "/");
     const url = `https://graph.microsoft.com/v1.0/drives/${driveId}/root:/${encodedPath}`;
 
-    const response = await fetch(url, {
+    const response = await resilientFetch(url, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
@@ -306,7 +307,7 @@ export class SharePointConnector implements SourceConnector {
     const accessToken = await this.getAccessToken();
     const url = `https://graph.microsoft.com/v1.0/drives/${driveId}/items/${itemId}/content`;
 
-    const response = await fetch(url, {
+    const response = await resilientFetch(url, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
@@ -479,7 +480,7 @@ async function getDefaultDriveId(
   accessToken: string
 ): Promise<string> {
   const url = `https://graph.microsoft.com/v1.0/sites/${siteId}/drive`;
-  const response = await fetch(url, {
+  const response = await resilientFetch(url, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
 

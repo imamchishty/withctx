@@ -1,6 +1,7 @@
 import type { SourceConnector } from "./types.js";
 import type { RawDocument, FetchOptions, SourceStatus } from "../types/source.js";
 import type { NotionSource } from "../types/config.js";
+import { resilientFetch } from "./resilient-fetch.js";
 
 interface NotionBlock {
   id: string;
@@ -69,9 +70,9 @@ export class NotionConnector implements SourceConnector {
       return false;
     }
     try {
-      const response = await fetch(`${NOTION_API_BASE}/users/me`, {
+      const response = await resilientFetch(`${NOTION_API_BASE}/users/me`, {
         headers: this.getHeaders(),
-      });
+      }, { rateLimitHeader: "retry-after" });
       if (!response.ok) {
         this.status.status = "error";
         this.status.error = `Notion API returned ${response.status}`;
@@ -138,9 +139,9 @@ export class NotionConnector implements SourceConnector {
       if (since) {
         body.filter = { timestamp: "last_edited_time", last_edited_time: { after: since.toISOString() } };
       }
-      const response = await fetch(`${NOTION_API_BASE}/databases/${databaseId}/query`, {
+      const response = await resilientFetch(`${NOTION_API_BASE}/databases/${databaseId}/query`, {
         method: "POST", headers: this.getHeaders(), body: JSON.stringify(body),
-      });
+      }, { rateLimitHeader: "retry-after" });
       if (!response.ok) throw new Error(`Notion database query failed (${response.status})`);
       const data = (await response.json()) as NotionListResponse;
       pages.push(...data.results);
@@ -150,7 +151,7 @@ export class NotionConnector implements SourceConnector {
   }
 
   private async fetchPage(pageId: string): Promise<NotionPage> {
-    const response = await fetch(`${NOTION_API_BASE}/pages/${pageId}`, { headers: this.getHeaders() });
+    const response = await resilientFetch(`${NOTION_API_BASE}/pages/${pageId}`, { headers: this.getHeaders() }, { rateLimitHeader: "retry-after" });
     if (!response.ok) throw new Error(`Notion page fetch failed (${response.status})`);
     return (await response.json()) as NotionPage;
   }
@@ -162,7 +163,7 @@ export class NotionConnector implements SourceConnector {
       const url = cursor
         ? `${NOTION_API_BASE}/blocks/${blockId}/children?start_cursor=${cursor}`
         : `${NOTION_API_BASE}/blocks/${blockId}/children`;
-      const response = await fetch(url, { headers: this.getHeaders() });
+      const response = await resilientFetch(url, { headers: this.getHeaders() }, { rateLimitHeader: "retry-after" });
       if (!response.ok) throw new Error(`Notion blocks fetch failed (${response.status})`);
       const data = (await response.json()) as NotionBlocksResponse;
       blocks.push(...data.results);
