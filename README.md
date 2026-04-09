@@ -1,8 +1,8 @@
 # withctx
 
-**Claude compiles your project knowledge into a living wiki that engineers and AI agents read before writing code.**
+**AI compiles your project knowledge into a living wiki that engineers and agents read before writing code.**
 
-withctx connects to where your knowledge already lives — Jira, Confluence, Teams, GitHub, SharePoint, local docs — and has Claude compile it into structured markdown pages. Engineers read it to onboard. Agents read it before writing code.
+withctx connects to where your knowledge already lives — Jira, Confluence, Teams, GitHub, Slack, Notion, SharePoint, local docs — and has AI compile it into structured markdown pages. Engineers read it to onboard. Agents read it before writing code.
 
 ```
 Your scattered knowledge              Compiled wiki
@@ -17,30 +17,23 @@ Coverage reports                  →    repos/api-service/testing.md
 Sarah's head                      →    manual/kafka-decision.md
 ```
 
-## Quick Start
-
-### Prerequisites
-
-- **Node.js 20+** — install via `brew install node` (Mac) or download from [nodejs.org](https://nodejs.org)
-- **Anthropic API key** — get one at [console.anthropic.com](https://console.anthropic.com)
+## Get Started in 30 Seconds
 
 ```bash
-# Install
 npm install -g withctx
-
-# Set API key (add to ~/.zshrc to persist)
-export ANTHROPIC_API_KEY=sk-ant-your-key-here
-
-# Verify everything works
-ctx doctor
-
-# Use on any project
+export ANTHROPIC_API_KEY=sk-ant-your-key-here   # get one at console.anthropic.com
 cd your-project
-ctx init                              # detect sources, create .ctx/
-ctx ingest                            # Claude compiles the wiki
-ctx query "how does auth work?"       # ask questions
-ctx chat                              # interactive Q&A
+ctx go                                           # That's it. One command.
 ```
+
+`ctx go` detects your sources, creates the config, and compiles the wiki. Then ask it anything:
+
+```bash
+ctx query "how does auth work?"
+ctx chat                              # Interactive Q&A
+```
+
+**Prerequisites:** Node.js 20+ and an API key from Anthropic, OpenAI, Google, or Ollama (local).
 
 ## Power Features
 
@@ -92,10 +85,68 @@ Claude reads everything, compiles structured wiki pages
 └── manual/              # Manually added context
 ```
 
-## All 29 Commands
+## MCP Integration (AI Agent Support)
+
+Connect AI coding agents directly to your wiki using MCP (Model Context Protocol). Agents can search context, read architecture docs, and store learnings — automatically, while they work.
+
+```bash
+ctx mcp --list                        # See all 10 available tools
+```
+
+**Claude Code** — add to `.claude/settings.json`:
+```json
+{
+  "mcpServers": {
+    "withctx": {
+      "command": "npx",
+      "args": ["-y", "withctx", "mcp"],
+      "cwd": "/path/to/your/project"
+    }
+  }
+}
+```
+
+**Cursor** — add to `.cursor/mcp.json`:
+```json
+{
+  "mcpServers": {
+    "withctx": {
+      "command": "npx",
+      "args": ["-y", "withctx", "mcp"],
+      "cwd": "/path/to/your/project"
+    }
+  }
+}
+```
+
+See [MCP Integration Guide](docs/guide/19-mcp-integration.md) for full setup with all tools.
+
+## RAG Exports
+
+Export your wiki in formats ready for AI pipelines (LangChain, LlamaIndex, or plain JSON chunks):
+
+```bash
+ctx export --format langchain          # LangChain Document objects
+ctx export --format llamaindex         # LlamaIndex Node objects
+ctx export --format rag-json           # Framework-agnostic JSON chunks
+ctx export --format rag-json --chunk-size 256   # Custom chunk size
+```
+
+## Vector Search
+
+Search your wiki by meaning, not just keywords:
+
+```bash
+ctx embed                                    # Generate embeddings (one-time)
+ctx search "how does authentication work"    # Semantic search
+```
+
+## All 34 Commands
 
 | Command | What it does | Costs? |
 |---------|-------------|--------|
+| `ctx go` | One command to start (init + ingest) | Paid |
+| `ctx setup` | Interactive setup wizard | Free |
 | `ctx init` | Setup project, detect sources | Free |
 | `ctx doctor` | Pre-flight diagnostics | Free |
 | `ctx ingest` | Full wiki compilation from all sources | Paid |
@@ -110,7 +161,10 @@ Claude reads everything, compiles structured wiki pages
 | `ctx changelog` | Auto release notes from git + wiki | Paid |
 | `ctx lint` | Check for contradictions, stale content, broken links | Paid |
 | `ctx pack` | Export wiki as CLAUDE.md / system prompt | Free |
-| `ctx export` | Export wiki in various formats | Free |
+| `ctx export` | Export wiki (markdown, JSON, LangChain, LlamaIndex, RAG) | Free |
+| `ctx embed` | Generate vector embeddings for semantic search | Depends |
+| `ctx search` | Semantic search across wiki | Free |
+| `ctx mcp` | Start MCP server for AI agent integration | Free |
 | `ctx onboard` | Generate onboarding guide | Paid |
 | `ctx import` | Import existing markdown into wiki | Paid |
 | `ctx status` | Show wiki health and freshness | Free |
@@ -126,7 +180,7 @@ Claude reads everything, compiles structured wiki pages
 | `ctx reset` | Wipe wiki and recompile | Free |
 | `ctx serve` | Start REST API server | Free |
 
-## 13 Source Connectors
+## 16 Source Connectors
 
 | Source | What it ingests |
 |--------|----------------|
@@ -143,6 +197,9 @@ Claude reads everything, compiles structured wiki pages
 | **CI/CD** | GitHub Actions workflow runs, build stats, failure analysis |
 | **Test Coverage** | lcov, istanbul, cobertura reports with per-file breakdown |
 | **Pull Requests** | Merged PRs, reviewers, files changed, activity patterns |
+| **OpenAPI** | API endpoints, schemas, auth requirements |
+| **Notion** | Database entries, pages, content blocks |
+| **Slack** | Channel messages, threads (noise filtered) |
 
 ## Single Repo vs Multi-Repo
 
@@ -164,18 +221,17 @@ acme/context/         # separate repo for the wiki
 
 ## For AI Agents
 
-Agents read the compiled wiki before writing code:
+Agents read the compiled wiki before writing code. Three ways to connect:
 
 ```bash
-# Generate CLAUDE.md for agents
+# 1. MCP — agents connect directly (recommended)
+ctx mcp                               # Start MCP server for Claude Code, Cursor, Windsurf
+
+# 2. Generate CLAUDE.md as a static file
 ctx pack --format claude-md --output CLAUDE.md
 
-# Or agents query directly
-ctx query "what patterns does api-service use?"
-
-# Or agents use the API
-ctx serve  # REST API on :4400
-# GET /api/pages, POST /api/query, POST /api/pack
+# 3. REST API for custom integrations
+ctx serve                             # REST API on :4400
 ```
 
 ## Cost
@@ -192,17 +248,19 @@ Uses prompt caching for ~90% cost reduction on repeated context. Budget enforcem
 
 ## Documentation
 
-- [Quick Start](docs/guide/02-quickstart.md) — zero to working wiki in 5 minutes
-- [All Commands](docs/guide/07-commands.md) — full CLI reference
-- [Source Setup](docs/guide/05-sources.md) — configure all 13 connectors
-- [Power Features](docs/guide/17-new-features.md) — review, explain, impact, and more
+- [Quick Start](docs/guide/02-quickstart.md) — zero to working wiki in 30 seconds
+- [All Commands](docs/guide/07-commands.md) — full CLI reference (34 commands)
+- [Source Setup](docs/guide/05-sources.md) — configure all 16 connectors
+- [Power Features](docs/guide/17-new-features.md) — review, explain, impact, vector search, and more
+- [Microservices Guide](docs/guide/18-microservices.md) — multi-repo teams
+- [MCP Integration](docs/guide/19-mcp-integration.md) — AI agent setup for Claude Code, Cursor, Windsurf
 - [For Agents](docs/guide/15-for-agents.md) — agent integration guide
-- [Full Guide](docs/guide/) — all 17 pages
+- [Full Guide](docs/guide/) — all 19 pages
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Easiest ways to contribute:
-- Add a new connector (Slack, Notion, Google Drive, Linear)
+- Add a new connector (Google Drive, Linear, Asana, Trello)
 - Add an export format (Cursor rules, Windsurf, Copilot)
 - Add a lint rule
 - Improve documentation

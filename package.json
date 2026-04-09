@@ -25,7 +25,8 @@
   ],
   "type": "module",
   "bin": {
-    "ctx": "./dist/cli/index.js"
+    "ctx": "./dist/cli/index.js",
+    "ctx-mcp": "./dist/mcp/index.js"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -48,13 +49,17 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.82.0",
+    "@google/generative-ai": "^0.21.0",
+    "@modelcontextprotocol/sdk": "^1.12.1",
     "@octokit/rest": "^21.0.0",
+    "chromadb": "^1.9.2",
     "chalk": "^5.4.0",
     "commander": "^13.1.0",
     "csv-parse": "^5.6.0",
     "fastify": "^5.2.0",
     "jszip": "^3.10.1",
     "mammoth": "^1.8.0",
+    "openai": "^4.73.0",
     "ora": "^8.2.0",
     "pdf-parse": "^1.1.1",
     "xlsx": "^0.18.5",

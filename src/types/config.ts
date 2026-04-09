@@ -92,6 +92,26 @@ const PullRequestsSourceSchema = z.object({
   labels: z.array(z.string()).optional(),
 });
 
+const OpenApiSourceSchema = z.object({
+  name: z.string(),
+  path: z.string().optional(),
+  url: z.string().url().optional(),
+});
+
+const NotionSourceSchema = z.object({
+  name: z.string(),
+  database_ids: z.array(z.string()).optional(),
+  page_ids: z.array(z.string()).optional(),
+  token: z.string().optional(),
+});
+
+const SlackSourceSchema = z.object({
+  name: z.string(),
+  channels: z.array(z.string()),
+  token: z.string().optional(),
+  since: z.string().optional(),
+});
+
 const SourcesSchema = z.object({
   local: z.array(LocalSourceSchema).optional(),
   jira: z.array(JiraSourceSchema).optional(),
@@ -101,6 +121,9 @@ const SourcesSchema = z.object({
   cicd: z.array(CicdSourceSchema).optional(),
   coverage: z.array(CoverageSourceSchema).optional(),
   "pull-requests": z.array(PullRequestsSourceSchema).optional(),
+  openapi: z.array(OpenApiSourceSchema).optional(),
+  notion: z.array(NotionSourceSchema).optional(),
+  slack: z.array(SlackSourceSchema).optional(),
 });
 
 // --- Repo schema ---
@@ -135,6 +158,15 @@ const AccessSchema = z.object({
     .optional(),
 });
 
+// --- AI provider schema ---
+
+const AiSchema = z.object({
+  provider: z.enum(["anthropic", "openai", "google", "ollama"]).default("anthropic"),
+  model: z.string().optional(),
+  base_url: z.string().optional(),
+  models: z.record(z.string()).optional(),
+});
+
 // --- Main config schema ---
 
 export const CtxConfigSchema = z.object({
@@ -143,9 +175,11 @@ export const CtxConfigSchema = z.object({
   sources: SourcesSchema.optional(),
   costs: CostsSchema.optional(),
   access: AccessSchema.optional(),
+  ai: AiSchema.optional(),
 });
 
 export type CtxConfig = z.infer<typeof CtxConfigSchema>;
+export type AiConfig = z.infer<typeof AiSchema>;
 export type LocalSource = z.infer<typeof LocalSourceSchema>;
 export type JiraSource = z.infer<typeof JiraSourceSchema>;
 export type ConfluenceSource = z.infer<typeof ConfluenceSourceSchema>;
@@ -154,6 +188,9 @@ export type TeamsSource = z.infer<typeof TeamsSourceSchema>;
 export type CicdSource = z.infer<typeof CicdSourceSchema>;
 export type CoverageSource = z.infer<typeof CoverageSourceSchema>;
 export type PullRequestsSource = z.infer<typeof PullRequestsSourceSchema>;
+export type OpenApiSource = z.infer<typeof OpenApiSourceSchema>;
+export type NotionSource = z.infer<typeof NotionSourceSchema>;
+export type SlackSource = z.infer<typeof SlackSourceSchema>;
 export type Repo = z.infer<typeof RepoSchema>;
 export type CostsConfig = z.infer<typeof CostsSchema>;
 export type AccessConfig = z.infer<typeof AccessSchema>;

@@ -2,6 +2,56 @@
 
 All commands are invoked as `ctx <command>`. Run `ctx --help` for a summary or `ctx <command> --help` for details on any command.
 
+## ctx go
+
+**The fastest way to start.** Runs `ctx init` and `ctx ingest` in a single command. Detects your project's sources automatically and compiles the wiki.
+
+```bash
+cd your-project
+ctx go
+```
+
+This is equivalent to running `ctx init` followed by `ctx ingest`, but with smart defaults — it scans for common sources (local docs, README, src/) and starts ingestion immediately.
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--org <name>` | Set the organization name for multi-repo setups |
+| `--name <name>` | Project name (default: directory name) |
+| `--bare` | Minimal ctx.yaml without example comments |
+
+---
+
+## ctx setup
+
+Interactive setup wizard for teams. Walks you through configuring sources, connecting integrations, and setting up your project step by step.
+
+```bash
+ctx setup
+```
+
+```
+Welcome to withctx setup!
+
+? Project name: acme-platform
+? Description: E-commerce platform with API, auth, and web app
+? Add local file sources? (Y/n) Y
+  Added: ./docs/, ./src/, ./README.md
+? Connect Jira? (y/N) y
+  ? Jira host: https://acme.atlassian.net
+  ? Project key: ACME
+? Connect GitHub? (y/N) y
+  ? Repository: acme-corp/acme-api
+? Run initial ingest now? (Y/n) Y
+
+Setup complete! Wiki compiled with 8 pages.
+```
+
+Use this when you want guided help choosing which sources to connect. For a quick start without the wizard, use `ctx go` instead.
+
+---
+
 ## ctx init
 
 Initialize a new withctx project in the current directory.
@@ -232,19 +282,163 @@ See [Packing and Export](11-packing-export.md) for detailed usage.
 
 ## ctx export
 
-Export the wiki in various formats.
+Export the wiki in various formats, including RAG-ready formats for use with AI frameworks.
 
 ```bash
-ctx export --format markdown --output ./exported-wiki/
-ctx export --format json --output wiki.json
+# Standard formats
+ctx export --format markdown
+ctx export --format json
+
+# RAG-ready formats for AI pipelines
+ctx export --format langchain           # LangChain Document objects
+ctx export --format llamaindex          # LlamaIndex Node objects
+ctx export --format rag-json            # Plain JSON chunks with metadata
+
+# Control chunk size for RAG exports
+ctx export --format langchain --chunk-size 256
 ```
+
+**What are RAG formats?** RAG (Retrieval-Augmented Generation) is a technique where AI models look up relevant information before answering questions. These export formats produce pre-chunked documents that plug directly into popular AI frameworks like LangChain and LlamaIndex.
 
 **Flags:**
 
 | Flag | Description |
 |------|-------------|
-| `--format <format>` | Export format: `markdown`, `json` |
-| `--output <path>` | Output file or directory |
+| `--format <format>` | Export format: `claude-md`, `system-prompt`, `markdown`, `json`, `langchain`, `llamaindex`, `rag-json` |
+| `--scope <dir>` | Limit to a specific wiki subdirectory |
+| `--budget <tokens>` | Token budget limit |
+| `--snapshot` | Create a timestamped snapshot archive |
+| `--chunk-size <words>` | Chunk size in words for RAG formats (default: 512) |
+
+---
+
+## ctx embed
+
+Generate vector embeddings for your wiki pages so you can use semantic search. Embeddings are mathematical representations of your text that allow searching by meaning rather than exact keywords.
+
+```bash
+ctx embed                     # Incremental — only embeds new/changed pages
+ctx embed --force             # Re-embed everything from scratch
+ctx embed --provider openai   # Use OpenAI embeddings instead of auto-detect
+```
+
+```
+Embedding [4/14] repos/api-service.md
+✔ Embedding complete
+
+  Embedding Stats:
+    Pages embedded:    14
+    Total chunks:      127
+    Dimensions:        1536
+    Store:             chroma
+    Embedding provider: openai
+    Last embedded:     2025-01-20T10:32:00.000Z
+```
+
+Run this after `ctx ingest` or `ctx sync` to keep embeddings up to date. Then use `ctx search` to query by meaning.
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--provider <provider>` | Embedding provider: `openai`, `local` (default: auto-detect from environment) |
+| `--store <store>` | Vector store: `chroma`, `memory` (default: auto-detect) |
+| `--force` | Re-embed all pages, even if unchanged |
+
+---
+
+## ctx search
+
+Semantic search across your wiki. Unlike `ctx query` (which uses Claude to answer), `ctx search` finds the most relevant wiki chunks by meaning without an AI call.
+
+```bash
+ctx search "how does authentication work"
+ctx search "payment retry logic" --limit 10
+ctx search "database migrations" --threshold 0.5
+ctx search "deployment" --source wiki
+```
+
+```
+  Search results for: "how does authentication work"
+  Showing top 5 results
+
+  1. architecture/auth.md [0.892]
+     Section: Authentication Flow
+     The API uses JWT tokens issued by auth-service. Tokens are validated...
+
+  2. repos/api-service/patterns.md [0.741]
+     Section: Middleware Chain
+     The auth middleware runs after rate limiting and before route handlers...
+
+  3. decisions.md [0.683]
+     Section: JWT Migration
+     After the Q3 security audit, the team migrated from session-based...
+```
+
+You must run `ctx embed` first to generate embeddings before searching.
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--limit <n>`, `-n` | Number of results to show (default: 5) |
+| `--threshold <score>`, `-t` | Minimum similarity score from 0 to 1 (default: 0) |
+| `--source <type>`, `-s` | Filter by source type: `wiki`, `source`, `memory` |
+
+---
+
+## ctx mcp
+
+Start an MCP (Model Context Protocol) server so AI coding agents can read your wiki directly. MCP is a standard protocol that lets tools like Claude Code, Cursor, and Windsurf connect to external data sources.
+
+```bash
+ctx mcp                       # Start the MCP server (connects via stdio)
+ctx mcp --list                # List available tools without starting the server
+```
+
+```
+Available MCP Tools:
+
+  search_context
+    Search across compiled wiki knowledge
+
+  get_page
+    Retrieve a specific wiki page by its path
+
+  get_architecture
+    Return the architecture overview
+
+  get_conventions
+    Return coding conventions
+
+  get_decisions
+    Return decision records (ADRs)
+
+  get_faq
+    Return the FAQ
+
+  list_pages
+    List all wiki pages
+
+  list_sources
+    Show configured data sources
+
+  get_file_context
+    Get all wiki context relevant to a specific file
+
+  add_memory
+    Store an agent learning or memory note
+
+  Total: 10 tools
+```
+
+See [MCP Integration](19-mcp-integration.md) for setup instructions with Claude Code, Cursor, and Windsurf.
+
+**Flags:**
+
+| Flag | Description |
+|------|-------------|
+| `--list` | List available MCP tools without starting the server |
 
 ---
 

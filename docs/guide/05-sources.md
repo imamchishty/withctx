@@ -1,6 +1,6 @@
 # Sources
 
-withctx connects to thirteen source types. Each connector reads data from its source, caches it locally in `.ctx/sources/`, and feeds it to Claude for wiki compilation.
+withctx connects to sixteen source types. Each connector reads data from its source, caches it locally in `.ctx/sources/`, and feeds it to Claude for wiki compilation.
 
 ## Overview
 
@@ -19,6 +19,9 @@ withctx connects to thirteen source types. Each connector reads data from its so
 | CI/CD | `cicd` | `GITHUB_TOKEN` | Build runs, success rates, failure analysis |
 | Test Coverage | `coverage` | No | lcov, istanbul, cobertura coverage reports |
 | Pull Requests | `pull-requests` | `GITHUB_TOKEN` | Merged PRs, reviewers, files changed, activity |
+| OpenAPI | `openapi` | No | API endpoints, schemas, auth requirements |
+| Notion | `notion` | `NOTION_TOKEN` | Database entries, pages, content blocks |
+| Slack | `slack` | `SLACK_TOKEN` | Channel messages, threads (noise-filtered) |
 
 ---
 
@@ -585,6 +588,182 @@ GITHUB_TOKEN=ghp_xxxxxxxxxxxxxxxxxxxx
 - Review comments and approval status
 - Activity summary: PRs per week, avg review time, most active contributors
 - Wiki pages generated: `repos/api-service/recent-changes.md`
+
+---
+
+## OpenAPI
+
+Reads API specifications from OpenAPI (Swagger) files. Gives the wiki complete knowledge of your API endpoints, request/response schemas, parameters, and authentication requirements. Works with both OpenAPI 3.x and Swagger 2.0 formats.
+
+### Configuration
+
+```yaml
+sources:
+  openapi:
+    # From a local file
+    - name: api-spec
+      path: ./openapi.yaml
+
+    # From a URL
+    - name: partner-api
+      url: https://api.partner.com/v2/openapi.json
+
+    # Multiple specs
+    - name: internal-api
+      path: ./specs/internal-api.yaml
+    - name: public-api
+      path: ./specs/public-api.yaml
+```
+
+### Authentication
+
+None required for local files. For URL-based specs behind authentication, use:
+
+```yaml
+sources:
+  openapi:
+    - name: private-api
+      url: https://api.internal.com/openapi.json
+      headers:
+        Authorization: "Bearer ${OPENAPI_TOKEN}"
+```
+
+### What Gets Ingested
+
+- All endpoints with their HTTP methods, paths, and descriptions
+- Request and response schemas (body, query params, path params)
+- Authentication and security schemes
+- Data model definitions from the components/definitions section
+- Server URLs and environment information
+- Wiki pages generated: `api/endpoints.md`, `api/schemas.md`
+
+---
+
+## Notion
+
+Reads pages and database entries from Notion. Useful for teams that keep product specs, design docs, meeting notes, or runbooks in Notion.
+
+### Configuration
+
+```yaml
+sources:
+  notion:
+    # Pull from specific databases
+    - name: product-docs
+      database_ids:
+        - "abc123def456..."           # Database ID from the Notion URL
+        - "789ghi012jkl..."
+
+    # Pull specific pages
+    - name: architecture-docs
+      page_ids:
+        - "mno345pqr678..."           # Page ID from the Notion URL
+
+    # Combine databases and pages
+    - name: all-docs
+      database_ids:
+        - "abc123def456..."
+      page_ids:
+        - "mno345pqr678..."
+```
+
+**Finding IDs:** Open a Notion page or database in your browser. The ID is the 32-character string in the URL after the workspace name.
+
+### Authentication
+
+Create a Notion internal integration:
+
+1. Go to https://www.notion.so/my-integrations
+2. Click "New integration" and give it a name
+3. Copy the "Internal Integration Secret"
+4. Share each database/page with the integration (click "..." menu on the page, then "Connections")
+
+```bash
+# .env
+NOTION_TOKEN=ntn_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+Or set it directly in ctx.yaml:
+
+```yaml
+sources:
+  notion:
+    - name: product-docs
+      token: ntn_xxxxxxxxxxxx      # Not recommended — use .env instead
+      database_ids:
+        - "abc123..."
+```
+
+### What Gets Ingested
+
+- Page titles and full content (text, headings, lists, code blocks, tables)
+- Database entries with all their properties (text, numbers, selects, dates, etc.)
+- Nested page content (child blocks)
+- Last edited time for freshness tracking
+- Wiki pages generated based on content structure
+
+---
+
+## Slack
+
+Reads messages from Slack channels. Automatically filters noise — short messages, reactions, join/leave notifications, and other non-substantive content are skipped so only meaningful discussions make it into the wiki.
+
+### Configuration
+
+```yaml
+sources:
+  slack:
+    - name: engineering
+      channels:
+        - engineering-general
+        - architecture-decisions
+        - incidents
+      since: 90d                     # Only messages from last 90 days
+
+    - name: product
+      channels:
+        - product-updates
+      since: 30d
+```
+
+### Authentication
+
+Create a Slack app with the right permissions:
+
+1. Go to https://api.slack.com/apps and click "Create New App"
+2. Choose "From scratch", name it (e.g., "withctx"), and select your workspace
+3. Go to "OAuth & Permissions" and add these Bot Token Scopes:
+   - `channels:history` — read messages from public channels
+   - `channels:read` — list channels
+   - `users:read` — resolve user names
+4. Click "Install to Workspace" and authorize
+5. Copy the "Bot User OAuth Token"
+
+```bash
+# .env
+SLACK_TOKEN=xoxb-xxxxxxxxxxxx-xxxxxxxxxxxx-xxxxxxxxxxxxxxxxxxxxxxxx
+```
+
+**Important:** Invite the bot to each channel you want to ingest. In Slack, go to the channel and type `/invite @withctx` (or whatever you named the app).
+
+### What Gets Ingested
+
+- Message text with author names and timestamps
+- Thread structure (replies grouped under parent messages)
+- Only substantive messages — the following are filtered out:
+  - Messages shorter than 30 characters
+  - Common acknowledgments ("ok", "thanks", "hi")
+  - System messages (joins, leaves, topic changes)
+- Wiki pages generated: organized by channel and topic
+
+### Noise Filtering
+
+Slack channels are noisy. The built-in noise filter ensures only useful content reaches the wiki:
+
+- Messages under 30 characters are skipped
+- Common one-word replies (hi, ok, thanks) are skipped
+- Threads with fewer than 2 replies are skipped (likely not substantive discussions)
+- System messages (member joined, topic changed) are skipped
 
 ---
 

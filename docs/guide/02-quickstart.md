@@ -1,20 +1,31 @@
 # Quickstart
 
-Get from zero to a working context wiki in five minutes.
+## Get Started in 30 Seconds
+
+```bash
+npm install -g withctx
+cd your-project
+ctx go
+```
+
+That's it. `ctx go` initializes your project, detects your sources (docs, code, README), and compiles your wiki in one command.
+
+Once it finishes, ask it anything:
+
+```bash
+ctx query "What is the tech stack?"
+ctx chat                        # Interactive Q&A
+```
+
+---
 
 ## Prerequisites
 
-You need two things installed. If you've never used Node.js before, follow these steps:
-
-### 1. Install Node.js 20+
+### 1. Node.js 20+
 
 **Mac:**
 ```bash
-# Using Homebrew (recommended)
 brew install node
-
-# Verify
-node --version   # should show v20+ or v22+
 ```
 
 **Windows:**
@@ -26,16 +37,17 @@ curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
 sudo apt-get install -y nodejs
 ```
 
-### 2. Get an Anthropic API Key
+### 2. An AI Provider API Key
+
+You need an API key from at least one provider. Anthropic (Claude) is recommended:
 
 1. Go to https://console.anthropic.com
 2. Sign up or log in
-3. Go to API Keys → Create Key
-4. Copy the key (starts with `sk-ant-`)
+3. Go to API Keys and create a key
+4. Set it in your terminal:
 
-Set it in your terminal:
 ```bash
-# Mac/Linux — add to your shell profile (~/.zshrc or ~/.bashrc)
+# Mac/Linux — add to ~/.zshrc or ~/.bashrc to persist
 export ANTHROPIC_API_KEY=sk-ant-your-key-here
 
 # Windows (PowerShell)
@@ -47,154 +59,81 @@ Or create a `.env` file in your project root:
 ANTHROPIC_API_KEY=sk-ant-your-key-here
 ```
 
-## Step 1: Install
+Other providers also work (OpenAI, Google Gemini, Ollama). See [Multi-Provider AI](17-new-features.md#multi-provider-ai) for details.
 
-```bash
-npm install -g withctx
-```
-
-Verify it works:
-
-```bash
-ctx --version
-# withctx v0.1.0
-```
-
-## Step 1.5: Verify Everything Works
+### 3. Verify Setup
 
 ```bash
 ctx doctor
 ```
 
-This checks Node.js, API key, and connectivity. Fix any ❌ items before proceeding.
+This checks Node.js, your API key, and connectivity. Fix any issues it reports before proceeding.
 
-## Step 2: Initialize a Project
+---
 
-Navigate to your project root and run:
+## Optional Next Steps
 
-```bash
-cd ~/projects/acme-platform
-ctx init
-```
+### Connect more sources
 
-Output:
-
-```
- Initializing withctx...
- Created .ctx/ directory
- Created ctx.yaml with defaults
- Created .ctx/context/ wiki directory
-
-Edit ctx.yaml to configure your sources, then run: ctx ingest
-```
-
-This creates:
-
-```
-.ctx/
-  context/          # Wiki pages will live here
-  sources/          # Cached raw source data (gitignored)
-  costs.json        # Token usage tracking
-ctx.yaml            # Project configuration
-```
-
-## Step 3: Configure Sources
-
-Open `ctx.yaml` and point it at your sources. For the quickstart, we will use local files only:
+Edit `ctx.yaml` to add Jira, Confluence, GitHub, Slack, Notion, and more:
 
 ```yaml
-# ctx.yaml
-project: acme-platform
-description: E-commerce platform with API, auth, and web app
-
 sources:
   local:
     paths:
-      - ./README.md
       - ./docs/
-      - ./architecture/
+      - ./src/
+  jira:
+    host: https://your-org.atlassian.net
+    projects:
+      - key: PROJ
 ```
 
-## Step 4: Ingest
-
-Run the initial ingest to compile your wiki:
-
+Then re-ingest:
 ```bash
 ctx ingest
 ```
 
-Output:
+### Use the interactive setup wizard
 
-```
- Reading sources...
-  Local files: 12 files found
- Compiling wiki pages...
-  Created: index.md
-  Created: architecture/overview.md
-  Created: repos/api-service.md
-  Created: onboarding/getting-started.md
- Wiki compiled: 4 pages from 12 sources
- Tokens used: ~8,200 input, ~3,100 output
- Cost: ~$0.04
-```
-
-## Step 5: Query
-
-Ask a question against your compiled wiki:
+If you prefer guided setup over editing YAML:
 
 ```bash
-ctx query "What is the tech stack?"
+ctx setup
 ```
 
-Output:
-
-```
-The acme-platform uses:
-- Backend: Node.js with Fastify, TypeScript
-- Database: PostgreSQL with Prisma ORM
-- Auth: OAuth 2.0 with PKCE, JWT tokens
-- Frontend: React 18 with Next.js 14
-- Infrastructure: AWS ECS, RDS, ElastiCache
-
-Sources: architecture/overview.md, repos/api-service.md
-```
-
-## Step 6: Start a Chat (Optional)
-
-For a multi-turn conversation:
+### Enable semantic search
 
 ```bash
-ctx chat
+ctx embed                                    # Generate embeddings
+ctx search "how does authentication work"    # Search by meaning
 ```
 
+### Connect AI coding agents
+
+If you use Claude Code, Cursor, or Windsurf, connect them to your wiki via MCP:
+
+```bash
+ctx mcp --list                # See available tools
 ```
- withctx chat — type /exit to quit, /save to save insights
 
-You: How is the API structured?
+See [MCP Integration](19-mcp-integration.md) for setup instructions.
 
-ctx: The API follows a modular route structure using Fastify plugins.
-     Each domain (users, orders, payments) is a separate plugin
-     registered in src/app.ts. Routes are in src/routes/, handlers
-     in src/handlers/, and schemas in src/schemas/.
+### Export for AI pipelines
 
-     Source: repos/api-service.md
-
-You: What about error handling?
-
-ctx: Errors use a centralized error handler registered as a Fastify
-     onError hook. Domain errors extend a base AppError class with
-     error codes. The convention is to throw typed errors from
-     handlers and let the hook format the HTTP response.
-
-     Source: repos/api-service.md, architecture/overview.md
-
-You: /exit
- Session ended.
+```bash
+ctx export --format langchain    # For LangChain
+ctx export --format llamaindex   # For LlamaIndex
+ctx export --format rag-json     # Framework-agnostic JSON chunks
 ```
+
+---
 
 ## What's Next
 
 - [Single-repo setup](03-single-repo-setup.md) — full setup for a simple project
 - [Multi-repo setup](04-multi-repo-setup.md) — dedicated context repo for larger teams
-- [Sources](05-sources.md) — connect Jira, Confluence, Teams, GitHub, and more
+- [Microservices guide](18-microservices.md) — multi-repo teams with cross-service context
+- [Sources](05-sources.md) — connect all 16 source types
 - [Commands](07-commands.md) — full CLI reference
+- [MCP Integration](19-mcp-integration.md) — AI agent setup

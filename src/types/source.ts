@@ -11,7 +11,10 @@ export type SourceType =
   | "sharepoint"
   | "cicd"
   | "coverage"
-  | "pull-requests";
+  | "pull-requests"
+  | "openapi"
+  | "notion"
+  | "slack";
 
 export interface SourceStatus {
   name: string;

@@ -6,12 +6,14 @@ import { join } from "node:path";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
+import { exportJsonChunks, exportLangChainDocuments, exportLlamaIndexNodes } from "../../export/rag.js";
 
 interface ExportOptions {
-  format?: "claude-md" | "system-prompt" | "markdown" | "json";
+  format?: "claude-md" | "system-prompt" | "markdown" | "json" | "langchain" | "llamaindex" | "rag-json";
   scope?: string;
   budget?: string;
   snapshot?: boolean;
+  chunkSize?: string;
 }
 
 function estimateTokens(text: string): number {
@@ -22,10 +24,11 @@ export function registerExportCommand(program: Command): void {
   program
     .command("export")
     .description("Export wiki to .ctx/exports/ in various formats")
-    .option("--format <fmt>", "Output format: claude-md, system-prompt, markdown, json", "claude-md")
+    .option("--format <fmt>", "Output format: claude-md, system-prompt, markdown, json, langchain, llamaindex, rag-json", "claude-md")
     .option("--scope <dir>", "Limit to a specific wiki subdirectory")
     .option("--budget <tokens>", "Token budget limit")
     .option("--snapshot", "Create a timestamped snapshot archive")
+    .option("--chunk-size <words>", "Chunk size in words for RAG formats (default: 512)")
     .action(async (options: ExportOptions) => {
       const spinner = ora("Exporting wiki...").start();
 
@@ -82,7 +85,33 @@ export function registerExportCommand(program: Command): void {
         let content: string;
         let extension: string;
 
+        const chunkSize = options.chunkSize ? parseInt(options.chunkSize, 10) : undefined;
+        const wikiPages = includedPages.map((p) => ({
+          path: p.path,
+          title: p.title,
+          content: p.content,
+          updatedAt: p.updatedAt,
+          createdAt: p.updatedAt,
+          sources: [] as string[],
+          references: [] as string[],
+        }));
+
         switch (format) {
+          case "rag-json": {
+            content = exportJsonChunks(wikiPages, config.project, chunkSize);
+            extension = "json";
+            break;
+          }
+          case "langchain": {
+            content = exportLangChainDocuments(wikiPages, config.project, chunkSize);
+            extension = "json";
+            break;
+          }
+          case "llamaindex": {
+            content = exportLlamaIndexNodes(wikiPages, config.project, chunkSize);
+            extension = "json";
+            break;
+          }
           case "json": {
             content = JSON.stringify(
               {
