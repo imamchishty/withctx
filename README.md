@@ -35,6 +35,19 @@ ctx chat                              # Interactive Q&A
 
 **Prerequisites:** Node.js 20+ and an API key from Anthropic, OpenAI, Google, or Ollama (local).
 
+## Install & Update
+
+```bash
+# Install
+npm install -g withctx
+
+# Check your version
+ctx --version
+
+# Update to latest
+npm update -g withctx
+```
+
 ## Power Features
 
 These are the commands that make withctx unique — no other tool has this depth of project understanding:
