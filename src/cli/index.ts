@@ -12,7 +12,6 @@ import { PageManager } from "../wiki/pages.js";
 import { scoreWikiFreshness } from "../quality/freshness.js";
 import type { WikiPage } from "../types/page.js";
 
-import { registerInitCommand } from "./commands/init.js";
 import { registerIngestCommand } from "./commands/ingest.js";
 import { registerSyncCommand } from "./commands/sync.js";
 import { registerAddCommand } from "./commands/add.js";
@@ -45,7 +44,6 @@ import { registerMcpCommand } from "./commands/mcp.js";
 import { registerEmbedCommand } from "./commands/embed.js";
 import { registerSearchCommand } from "./commands/search.js";
 import { registerGoCommand } from "./commands/go.js";
-import { registerSetupCommand } from "./commands/setup.js";
 import { registerGlossaryCommand } from "./commands/glossary.js";
 import { registerWhoCommand } from "./commands/who.js";
 import { registerTodosCommand } from "./commands/todos.js";
@@ -366,8 +364,10 @@ function printSmartDefault(): void {
   console.log();
 }
 
-// Register all subcommands
-registerInitCommand(program);
+// Register all subcommands.
+// `ctx setup` (with `init` and `go` as aliases) is registered by
+// registerGoCommand — the three names all hit the same action.
+registerGoCommand(program);
 registerIngestCommand(program);
 registerSyncCommand(program);
 registerAddCommand(program);
@@ -399,8 +399,6 @@ registerFaqCommand(program);
 registerMcpCommand(program);
 registerEmbedCommand(program);
 registerSearchCommand(program);
-registerGoCommand(program);
-registerSetupCommand(program);
 registerGlossaryCommand(program);
 registerWhoCommand(program);
 registerTodosCommand(program);

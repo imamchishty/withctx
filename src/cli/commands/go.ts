@@ -151,21 +151,26 @@ interface InitResult {
   configPath: string;
   rootDir: string;
   wasAlreadyInitialized: boolean;
+  detectedSources: { name: string; path: string; fileCount: number }[];
 }
 
-async function runInit(
-  rootDir: string,
-  connectors: string[],
-  org: string | undefined,
-  token: string | undefined,
-  spinner: ReturnType<typeof ora>,
-): Promise<InitResult> {
+interface RunInitArgs {
+  rootDir: string;
+  connectors: string[];
+  org: string | undefined;
+  token: string | undefined;
+  spinner: ReturnType<typeof ora>;
+  projectNameOverride?: string;
+}
+
+async function runInit(args: RunInitArgs): Promise<InitResult> {
+  const { rootDir, connectors, org, token, spinner, projectNameOverride } = args;
   const existingConfig = findConfigFile(rootDir);
   const wasAlreadyInitialized = existingConfig !== null;
 
   if (wasAlreadyInitialized) {
     spinner.succeed(chalk.dim("Already initialized — skipping init step"));
-    const projectName = detectProjectName(rootDir);
+    const projectName = projectNameOverride ?? detectProjectName(rootDir);
     const localSources = scanLocalSources(rootDir);
     return {
       projectName,
@@ -173,12 +178,13 @@ async function runInit(
       configPath: existingConfig!,
       rootDir,
       wasAlreadyInitialized: true,
+      detectedSources: localSources,
     };
   }
 
   spinner.text = "Scanning project structure...";
 
-  const projectName = detectProjectName(rootDir);
+  const projectName = projectNameOverride ?? detectProjectName(rootDir);
   const localSources = scanLocalSources(rootDir);
 
   spinner.text = `Found ${localSources.length} local source(s)...`;
@@ -339,6 +345,7 @@ async function runInit(
     configPath,
     rootDir,
     wasAlreadyInitialized: false,
+    detectedSources: localSources,
   };
 }
 
@@ -434,20 +441,30 @@ interface GoOptions {
   org?: string;
   token?: string;
   with?: string[];
+  name?: string;
+  ingest?: boolean;
 }
 
 export function registerGoCommand(program: Command): void {
   program
-    .command("go")
-    .description("One command to start — init, ingest, and go")
+    .command("setup")
+    .aliases(["init", "go"])
+    .description(
+      "Set up a withctx project — detect sources, write ctx.yaml, compile wiki"
+    )
+    .option("--name <name>", "Project name (defaults to package.json name or folder name)")
     .option("--org <org>", "GitHub organization to discover repos from")
     .option("--token <token>", "GitHub token for org discovery (or set GITHUB_TOKEN)")
     .option("--with <connectors...>", "Add external connectors (jira, confluence, teams, github)")
+    .option(
+      "--no-ingest",
+      "Write ctx.yaml only — skip the wiki compilation step"
+    )
     .action(async (options: GoOptions) => {
       const rootDir = resolve(process.cwd());
 
       console.log();
-      console.log(chalk.bold.cyan("  ctx go") + chalk.dim(" — let's get you set up"));
+      console.log(chalk.bold.cyan("  ctx setup") + chalk.dim(" — let's get you set up"));
       console.log();
 
       // ---------------------------------------------------------------
@@ -460,13 +477,14 @@ export function registerGoCommand(program: Command): void {
 
       let initResult: InitResult;
       try {
-        initResult = await runInit(
+        initResult = await runInit({
           rootDir,
           connectors,
-          options.org,
-          githubToken,
-          initSpinner,
-        );
+          org: options.org,
+          token: githubToken,
+          spinner: initSpinner,
+          ...(options.name !== undefined && { projectNameOverride: options.name }),
+        });
       } catch (error) {
         initSpinner.fail(chalk.red("Initialization failed"));
         if (error instanceof Error) {
@@ -475,12 +493,32 @@ export function registerGoCommand(program: Command): void {
         process.exit(1);
       }
 
+      // Show detected sources up front — users want to know what was
+      // found before anything else happens.
+      if (initResult.detectedSources.length > 0) {
+        console.log();
+        console.log(chalk.bold("  Detected sources:"));
+        for (const source of initResult.detectedSources) {
+          console.log(
+            `    ${chalk.cyan(source.name)} ${chalk.dim(`(${source.path})`)} — ${source.fileCount} files`
+          );
+        }
+        console.log();
+      }
+
       // ---------------------------------------------------------------
-      // Step 2: Ingest (only if API key is available)
+      // Step 2: Ingest (only if API key is available AND not skipped)
       // ---------------------------------------------------------------
       const hasApiKey = Boolean(process.env.ANTHROPIC_API_KEY);
+      const skipIngest = options.ingest === false;
 
-      if (hasApiKey) {
+      if (skipIngest) {
+        console.log(
+          chalk.dim("  Skipping wiki compilation (--no-ingest). Run ") +
+            chalk.bold("ctx ingest") +
+            chalk.dim(" when ready.")
+        );
+      } else if (hasApiKey) {
         const ingestSpinner = ora("Compiling wiki with Claude...").start();
 
         try {
@@ -544,16 +582,25 @@ export function registerGoCommand(program: Command): void {
       console.log(chalk.bold("  What's next?"));
       console.log();
 
-      if (!hasApiKey) {
-        console.log(
-          `  ${chalk.cyan("1.")} Set your API key:  ${chalk.bold("export ANTHROPIC_API_KEY=sk-...")}`
-        );
-        console.log(
-          `  ${chalk.cyan("2.")} Compile the wiki:  ${chalk.bold("ctx ingest")}`
-        );
-        console.log(
-          `  ${chalk.cyan("3.")} Chat with your codebase: ${chalk.bold("ctx chat")}`
-        );
+      if (!hasApiKey || skipIngest) {
+        if (!hasApiKey) {
+          console.log(
+            `  ${chalk.cyan("1.")} Set your API key:  ${chalk.bold("export ANTHROPIC_API_KEY=sk-...")}`
+          );
+          console.log(
+            `  ${chalk.cyan("2.")} Compile the wiki:  ${chalk.bold("ctx ingest")}`
+          );
+          console.log(
+            `  ${chalk.cyan("3.")} Chat with your codebase: ${chalk.bold("ctx chat")}`
+          );
+        } else {
+          console.log(
+            `  ${chalk.cyan("1.")} Compile the wiki:  ${chalk.bold("ctx ingest")}`
+          );
+          console.log(
+            `  ${chalk.cyan("2.")} Chat with your codebase: ${chalk.bold("ctx chat")}`
+          );
+        }
       } else {
         console.log(
           `  ${chalk.cyan("1.")} Explore your wiki: ${chalk.bold("ctx status")}`

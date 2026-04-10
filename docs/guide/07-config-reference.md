@@ -25,7 +25,7 @@ access: {...}                # redaction rules for sensitive content
 ai: {...}                    # LLM provider, model, base URL, per-op overrides
 ```
 
-Only `project` is required. Everything else is optional — `ctx init`
+Only `project` is required. Everything else is optional — `ctx setup`
 writes the minimal useful file and you add sections as you need them.
 
 ---
@@ -249,7 +249,7 @@ sources:
 ```
 
 That's it. Combined with `export ANTHROPIC_API_KEY=sk-ant-...` you can
-run `ctx go` and get a working wiki.
+run `ctx setup` and get a working wiki.
 
 ---
 

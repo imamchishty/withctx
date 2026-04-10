@@ -34,10 +34,10 @@ Sarah's head                      →    manual/kafka-decision.md
 npm install -g withctx
 export ANTHROPIC_API_KEY=sk-ant-your-key-here   # get one at console.anthropic.com
 cd your-project
-ctx go                                           # That's it. One command.
+ctx setup                                        # That's it. One command.
 ```
 
-`ctx go` detects your sources, creates the config, and compiles the wiki. Then ask it anything:
+`ctx setup` detects your sources, creates the config, and compiles the wiki. (`ctx init` and `ctx go` are aliases.) Then ask it anything:
 
 ```bash
 ctx query "how does auth work?"
@@ -187,14 +187,13 @@ ctx embed                                    # Generate embeddings (one-time)
 ctx search "how does authentication work"    # Semantic search
 ```
 
-## All 34 Commands
+## All Commands
 
 | Command | What it does | Costs? |
 |---------|-------------|--------|
-| `ctx go` | One command to start (init + ingest) | Paid |
-| `ctx setup` | Interactive setup wizard | Free |
-| `ctx init` | Setup project, detect sources | Free |
+| `ctx setup` | One command to start — detect sources, write `ctx.yaml`, compile wiki. `ctx init` and `ctx go` are aliases. | Paid (skip with `--no-ingest`) |
 | `ctx doctor` | Pre-flight diagnostics | Free |
+| `ctx todos` | Scan code for TODO/FIXME markers, optionally write to the wiki | Free |
 | `ctx ingest` | Full wiki compilation from all sources | Paid |
 | `ctx sync` | Incremental update (changed sources only) | Paid |
 | `ctx query` | Ask a question, get an answer with sources | Paid |

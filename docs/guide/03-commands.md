@@ -6,10 +6,18 @@ Every command, one line each. Run `ctx help` for the same view in your terminal.
 
 | Command | Does |
 |---|---|
-| `ctx go` | Init + ingest in one shot. Use this first. |
-| `ctx setup` | Interactive wizard if `go` doesn't fit. |
-| `ctx init` | Just create `.ctx/` and `ctx.yaml`. |
-| `ctx add <source>` | Interactively add a source (jira, github, …). |
+| `ctx setup` | Detect sources, write `ctx.yaml`, compile the wiki. **The only setup command.** |
+| `ctx setup --no-ingest` | Write `ctx.yaml` only — useful when you want to edit it before the first compile. |
+| `ctx setup --with jira,confluence` | Also scaffold external connectors. |
+| `ctx setup --org acme --token ghp_...` | Discover every repo in a GitHub org. |
+| `ctx add <source>` | Interactively add a source (jira, github, slack, …). |
+
+> `ctx init` and `ctx go` are aliases for `ctx setup` — all three names run the same code. Use whichever your muscle memory prefers.
+
+| Then | Does |
+|---|---|
+| `ctx ingest` | Compile the wiki (run this if you used `--no-ingest`). |
+| `ctx todos` | Scan code for TODO/FIXME markers. `--write` saves them to the wiki. |
 
 ## Daily use
 

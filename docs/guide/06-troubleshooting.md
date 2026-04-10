@@ -69,7 +69,7 @@ Run `ctx costs` — the per-operation breakdown will show which command is eatin
 Restart the editor entirely. Some hosts don't pick up MCP changes without a full restart. If still missing, run `ctx mcp` standalone — it should print the tool list at startup.
 
 **`Claude Code says it can't read .ctx/`**
-You're in a different working directory than where you ran `ctx go`. `.ctx/` is project-local. Either run from the project root, or `ctx serve` and have the agent hit the HTTP API.
+You're in a different working directory than where you ran `ctx setup`. `.ctx/` is project-local. Either run from the project root, or `ctx serve` and have the agent hit the HTTP API.
 
 ---
 

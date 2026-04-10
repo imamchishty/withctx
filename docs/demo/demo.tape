@@ -55,5 +55,5 @@ Sleep 300ms
 Type "# withctx — AI-compiled project wiki"
 Sleep 800ms
 Enter
-Type "# 16 sources  -  136 tests  -  one command: ctx go"
+Type "# 16 sources  -  136 tests  -  one command: ctx setup"
 Sleep 3s

@@ -131,7 +131,7 @@ sources:
     exclude: ["**/node_modules", "**/dist"]
 ```
 
-Run `ctx go` from `~/work/acme`. The wiki captures cross-repo conventions in one place without anyone needing a monorepo migration.
+Run `ctx setup` from `~/work/acme`. The wiki captures cross-repo conventions in one place without anyone needing a monorepo migration.
 
 ### Pattern C — remote multi-repo (GitHub)
 
