@@ -1,0 +1,167 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 540" role="img" aria-label="withctx architecture: sources compiled into a wiki for humans and AI">
+  <defs>
+    <style>
+      .t { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; fill: #1f2937; }
+      .title { font-size: 18px; font-weight: 600; fill: #1f2937; }
+      .heading { font-size: 14px; font-weight: 600; fill: #6b7280; letter-spacing: 0.5px; }
+      .label { font-size: 14px; fill: #1f2937; }
+      .sub { font-size: 12px; fill: #6b7280; }
+      .accent { font-size: 15px; font-weight: 600; fill: #ffffff; }
+      .box { fill: #ffffff; stroke: #e5e7eb; stroke-width: 1.5; }
+      .boxAlt { fill: #f9fafb; stroke: #e5e7eb; stroke-width: 1.5; }
+      .accentBox { fill: #6366f1; stroke: #6366f1; }
+    </style>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="3"/>
+      <feOffset dx="0" dy="2" result="o"/>
+      <feComponentTransfer><feFuncA type="linear" slope="0.08"/></feComponentTransfer>
+      <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="540" fill="#ffffff"/>
+
+  <text x="600" y="36" text-anchor="middle" class="t title">How withctx works</text>
+
+  <!-- SOURCES COLUMN -->
+  <g>
+    <text x="140" y="78" class="t heading">SOURCES</text>
+    <g filter="url(#shadow)">
+      <rect x="50" y="92" width="240" height="42" rx="8" class="box"/>
+      <text x="70" y="119" class="t label">Local Code</text>
+    </g>
+    <g filter="url(#shadow)">
+      <rect x="50" y="144" width="240" height="42" rx="8" class="box"/>
+      <text x="70" y="171" class="t label">Jira</text>
+    </g>
+    <g filter="url(#shadow)">
+      <rect x="50" y="196" width="240" height="42" rx="8" class="box"/>
+      <text x="70" y="223" class="t label">Confluence</text>
+    </g>
+    <g filter="url(#shadow)">
+      <rect x="50" y="248" width="240" height="42" rx="8" class="box"/>
+      <text x="70" y="275" class="t label">GitHub</text>
+    </g>
+    <g filter="url(#shadow)">
+      <rect x="50" y="300" width="240" height="42" rx="8" class="box"/>
+      <text x="70" y="327" class="t label">Slack</text>
+    </g>
+    <g filter="url(#shadow)">
+      <rect x="50" y="352" width="240" height="42" rx="8" class="box"/>
+      <text x="70" y="379" class="t label">Notion</text>
+    </g>
+    <g>
+      <rect x="50" y="404" width="240" height="38" rx="8" class="boxAlt" stroke-dasharray="4 3"/>
+      <text x="170" y="428" text-anchor="middle" class="t sub">+ 10 more connectors</text>
+    </g>
+  </g>
+
+  <!-- Arrows sources -> withctx -->
+  <g stroke="#6b7280" stroke-width="1.5" fill="none">
+    <path d="M 294 113 C 360 113, 400 260, 470 260" marker-end="url(#arrow)"/>
+    <path d="M 294 165 C 360 165, 400 262, 470 262" marker-end="url(#arrow)"/>
+    <path d="M 294 217 C 360 217, 410 265, 470 265" marker-end="url(#arrow)"/>
+    <path d="M 294 269 L 470 269" marker-end="url(#arrow)"/>
+    <path d="M 294 321 C 360 321, 410 275, 470 275" marker-end="url(#arrow)"/>
+    <path d="M 294 373 C 360 373, 400 280, 470 280" marker-end="url(#arrow)"/>
+  </g>
+
+  <!-- WITHCTX COMPILE (center) -->
+  <g>
+    <text x="600" y="78" text-anchor="middle" class="t heading">COMPILE</text>
+    <g filter="url(#shadow)">
+      <rect x="470" y="210" width="260" height="120" rx="12" class="accentBox"/>
+      <!-- simple AI spark icon -->
+      <g transform="translate(498,246)" fill="#ffffff">
+        <path d="M14 0 L16 10 L26 12 L16 14 L14 24 L12 14 L2 12 L12 10 Z"/>
+        <circle cx="32" cy="6" r="2.2"/>
+        <circle cx="34" cy="20" r="1.6"/>
+      </g>
+      <text x="600" y="278" text-anchor="middle" class="t accent">withctx compile</text>
+      <text x="600" y="300" text-anchor="middle" class="t" font-size="12" fill="#e0e7ff">Claude reads everything</text>
+    </g>
+  </g>
+
+  <!-- Arrow center -> wiki -->
+  <g stroke="#6b7280" stroke-width="1.5" fill="none">
+    <path d="M 730 270 L 890 270" marker-end="url(#arrow)"/>
+  </g>
+
+  <!-- WIKI COLUMN -->
+  <g>
+    <text x="1030" y="78" text-anchor="middle" class="t heading">WIKI PAGES</text>
+    <text x="1030" y="96" text-anchor="middle" class="t sub">auto-updated</text>
+
+    <g filter="url(#shadow)">
+      <rect x="890" y="112" width="280" height="64" rx="8" class="box"/>
+      <rect x="906" y="128" width="4" height="32" rx="2" fill="#6366f1"/>
+      <text x="922" y="140" class="t label">architecture.md</text>
+      <text x="922" y="160" class="t sub">services, dependencies, infra</text>
+    </g>
+    <g filter="url(#shadow)">
+      <rect x="890" y="186" width="280" height="64" rx="8" class="box"/>
+      <rect x="906" y="202" width="4" height="32" rx="2" fill="#6366f1"/>
+      <text x="922" y="214" class="t label">api.md</text>
+      <text x="922" y="234" class="t sub">endpoints, schemas, auth</text>
+    </g>
+    <g filter="url(#shadow)">
+      <rect x="890" y="260" width="280" height="64" rx="8" class="box"/>
+      <rect x="906" y="276" width="4" height="32" rx="2" fill="#6366f1"/>
+      <text x="922" y="288" class="t label">onboarding.md</text>
+      <text x="922" y="308" class="t sub">new hire guide</text>
+    </g>
+    <g filter="url(#shadow)">
+      <rect x="890" y="334" width="280" height="64" rx="8" class="box"/>
+      <rect x="906" y="350" width="4" height="32" rx="2" fill="#6366f1"/>
+      <text x="922" y="362" class="t label">auth.md</text>
+      <text x="922" y="382" class="t sub">sessions, tokens, RBAC</text>
+    </g>
+    <g>
+      <rect x="890" y="408" width="280" height="34" rx="8" class="boxAlt" stroke-dasharray="4 3"/>
+      <text x="1030" y="430" text-anchor="middle" class="t sub">+ index, decisions, conventions, repos/...</text>
+    </g>
+  </g>
+
+  <!-- Divider -->
+  <line x1="50" y1="462" x2="1150" y2="462" stroke="#e5e7eb" stroke-width="1"/>
+
+  <!-- CONSUMERS ROW -->
+  <g>
+    <text x="50" y="484" class="t heading">CONSUMERS</text>
+
+    <g filter="url(#shadow)">
+      <rect x="180" y="474" width="200" height="44" rx="8" class="box"/>
+      <circle cx="204" cy="496" r="8" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+      <text x="222" y="501" class="t label">Engineers</text>
+    </g>
+
+    <g filter="url(#shadow)">
+      <rect x="400" y="474" width="200" height="44" rx="8" class="box"/>
+      <circle cx="424" cy="496" r="8" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+      <text x="442" y="501" class="t label">New Hires</text>
+    </g>
+
+    <g filter="url(#shadow)">
+      <rect x="620" y="474" width="220" height="44" rx="8" class="box"/>
+      <circle cx="644" cy="496" r="8" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+      <text x="662" y="501" class="t label">AI Agents (MCP)</text>
+    </g>
+
+    <g filter="url(#shadow)">
+      <rect x="860" y="474" width="220" height="44" rx="8" class="box"/>
+      <circle cx="884" cy="496" r="8" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+      <text x="902" y="501" class="t label">RAG Pipelines</text>
+    </g>
+  </g>
+
+  <!-- Arrows wiki -> consumers -->
+  <g stroke="#6b7280" stroke-width="1.5" fill="none">
+    <path d="M 980 442 C 980 460, 280 460, 280 474" marker-end="url(#arrow)"/>
+    <path d="M 990 442 C 990 460, 500 460, 500 474" marker-end="url(#arrow)"/>
+    <path d="M 1010 442 C 1010 460, 730 460, 730 474" marker-end="url(#arrow)"/>
+    <path d="M 1030 442 L 970 474" marker-end="url(#arrow)"/>
+  </g>
+</svg>

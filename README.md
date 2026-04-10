@@ -1,6 +1,13 @@
 # withctx
 
+[![CI](https://github.com/imamchishty/withctx/actions/workflows/ci.yml/badge.svg)](https://github.com/imamchishty/withctx/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-114%20passing-brightgreen)](https://github.com/imamchishty/withctx/actions/workflows/ci.yml)
+
 **AI compiles your project knowledge into a living wiki that engineers and agents read before writing code.**
+
+<p align="center">
+  <img src="docs/images/architecture.svg" alt="withctx architecture — sources compiled into a wiki for humans and AI" width="100%" />
+</p>
 
 withctx connects to where your knowledge already lives — Jira, Confluence, Teams, GitHub, Slack, Notion, SharePoint, local docs — and has AI compile it into structured markdown pages. Engineers read it to onboard. Agents read it before writing code.
 
@@ -76,13 +83,35 @@ ctx metrics
 
 Inspired by [Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f): knowledge is compiled once into maintained wiki pages, not re-derived on every query.
 
+```mermaid
+flowchart LR
+    A1[Local Code]
+    A2[Jira]
+    A3[Confluence]
+    A4[GitHub]
+    A5[Slack / Notion / +11 more]
+    B{{withctx compile}}
+    C[Claude reads everything]
+    D[Wiki Pages<br/>architecture • api • onboarding • auth]
+    E[Engineers]
+    F[New Hires]
+    G[AI Agents via MCP]
+    H[RAG Pipelines]
+
+    A1 --> B
+    A2 --> B
+    A3 --> B
+    A4 --> B
+    A5 --> B
+    B --> C
+    C --> D
+    D --> E
+    D --> F
+    D --> G
+    D --> H
 ```
-Sources (Jira, Confluence, Teams, GitHub, SharePoint, docs, CI/CD)
-  │
-  ▼  ctx ingest
-Claude reads everything, compiles structured wiki pages
-  │
-  ▼
+
+```
 .ctx/context/
 ├── index.md             # Catalog of all pages (browsable on GitHub)
 ├── overview.md          # Project summary

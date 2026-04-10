@@ -485,9 +485,10 @@ export function registerIngestCommand(program: Command): void {
         const startTime = Date.now();
         const prompt = buildCompilePrompt(uniqueDocs, existingPages);
 
-        const claudeOptions: { maxTokens?: number; systemPrompt: string } = {
+        const claudeOptions: { maxTokens?: number; systemPrompt: string; cacheSystemPrompt: boolean } = {
           systemPrompt:
             "You are a technical documentation compiler. Compile source documents into a well-structured wiki. Output pages in the exact format requested.",
+          cacheSystemPrompt: true,
         };
         if (options.maxTokens) {
           claudeOptions.maxTokens = parseInt(options.maxTokens, 10);
@@ -559,6 +560,23 @@ export function registerIngestCommand(program: Command): void {
             console.error(
               `  Tokens used:     ${chalk.cyan(totalTokens.toLocaleString())} (${formatCost(actualTotalCost)})`
             );
+
+            // Show cache savings when we got a cache hit
+            const cacheRead = response.tokensUsed.cacheRead ?? 0;
+            if (cacheRead > 0) {
+              const inputPricing = MODEL_PRICING[model] ?? MODEL_PRICING["claude-sonnet-4"];
+              // Cached reads cost 10% of normal input, so savings = 90% of normal input cost
+              const savedUsd = (cacheRead / 1_000_000) * inputPricing.input * 0.9;
+              console.error(
+                `  Cache hit:       ${chalk.green(cacheRead.toLocaleString())} tokens read from cache (saved ~${formatCost(savedUsd)})`
+              );
+            }
+            const cacheCreation = response.tokensUsed.cacheCreation ?? 0;
+            if (cacheCreation > 0 && cacheRead === 0) {
+              console.error(
+                `  Cache primed:    ${chalk.dim(cacheCreation.toLocaleString())} tokens written to cache (savings on next ingest)`
+              );
+            }
           }
           console.error(`  Duration:        ${chalk.cyan(formatDuration(elapsed))}`);
           console.error();

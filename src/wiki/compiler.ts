@@ -352,6 +352,7 @@ export class WikiCompiler {
     const response = await this.claude.prompt(prompt, {
       systemPrompt: COMPILE_SYSTEM_PROMPT,
       maxTokens: 8192,
+      cacheSystemPrompt: true,
     });
 
     stats.tokensUsed += response.tokensUsed ? (response.tokensUsed.input + response.tokensUsed.output) : 0;
@@ -467,6 +468,7 @@ export class WikiCompiler {
     const response = await this.claude.prompt(prompt, {
       systemPrompt: COMPILE_SYSTEM_PROMPT,
       maxTokens: 8192,
+      cacheSystemPrompt: true,
     });
 
     stats.tokensUsed += response.tokensUsed ? (response.tokensUsed.input + response.tokensUsed.output) : 0;
@@ -503,6 +505,7 @@ export class WikiCompiler {
     const response = await this.claude.prompt(prompt, {
       systemPrompt: COMPILE_SYSTEM_PROMPT,
       maxTokens: 8192,
+      cacheSystemPrompt: true,
     });
 
     stats.tokensUsed += response.tokensUsed ? (response.tokensUsed.input + response.tokensUsed.output) : 0;
@@ -541,6 +544,7 @@ export class WikiCompiler {
         const repoResponse = await this.claude.prompt(repoPrompt, {
           systemPrompt: COMPILE_SYSTEM_PROMPT,
           maxTokens: 4096,
+          cacheSystemPrompt: true,
         });
 
         stats.tokensUsed += repoResponse.tokensUsed ? (repoResponse.tokensUsed.input + repoResponse.tokensUsed.output) : 0;
