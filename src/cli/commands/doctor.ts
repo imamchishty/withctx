@@ -111,7 +111,7 @@ function checkConfigFile(): CheckResult {
     label: "ctx.yaml",
     status: "fail",
     message: "Not found",
-    fix: "Run 'ctx init' to create a configuration file.",
+    fix: "Run 'ctx setup' to create a configuration file.",
   };
 }
 
@@ -122,7 +122,7 @@ function checkCtxDirectory(): CheckResult {
       label: ".ctx/ directory",
       status: "fail",
       message: "Cannot check — no ctx.yaml found",
-      fix: "Run 'ctx init' to initialize the project.",
+      fix: "Run 'ctx setup' to initialize the project.",
     };
   }
 
@@ -141,7 +141,7 @@ function checkCtxDirectory(): CheckResult {
     label: ".ctx/ directory",
     status: "fail",
     message: "Not initialized",
-    fix: "Run 'ctx init' to create the .ctx/ directory.",
+    fix: "Run 'ctx setup' to create the .ctx/ directory.",
   };
 }
 
@@ -446,7 +446,7 @@ function checkWikiHasPages(projectRoot: string): CheckResult {
       label: "Wiki content",
       status: "warn",
       message: "Wiki not initialized",
-      fix: "Run 'ctx init' then 'ctx sync' to build the wiki.",
+      fix: "Run 'ctx setup' then 'ctx sync' to build the wiki.",
     };
   }
 

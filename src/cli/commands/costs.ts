@@ -29,7 +29,7 @@ export function registerCostsCommand(program: Command): void {
         const ctxDir = new CtxDirectory(projectRoot);
 
         if (!ctxDir.exists()) {
-          ui.error("No .ctx/ directory found.", "Run 'ctx init' first.");
+          ui.error("No .ctx/ directory found.", "Run 'ctx setup' first.");
           process.exit(1);
         }
 

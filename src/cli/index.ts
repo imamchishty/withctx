@@ -68,10 +68,9 @@ const GROUPED_HELP: Array<{ heading: string; commands: Array<[string, string]> }
   {
     heading: "Getting Started",
     commands: [
-      ["ctx go", "One command: init + ingest your project"],
-      ["ctx setup", "Interactive setup wizard"],
-      ["ctx init", "Initialize a new .ctx directory"],
-      ["ctx add <source>", "Add a source (github, jira, confluence...)"],
+      ["ctx setup", "Detect sources, write ctx.yaml, compile the wiki (aliases: init, go)"],
+      ["ctx add <source>", "Add a source (github, jira, confluence, slack, notion, local)"],
+      ["ctx todos", "Scan code for TODO/FIXME markers"],
     ],
   },
   {
@@ -318,9 +317,8 @@ function printSmartDefault(): void {
     console.log();
     console.log("  Get started:");
     console.log();
-    console.log(`    ${chalk.cyan("ctx go")}              ${chalk.dim("One command: init + ingest your project")}`);
-    console.log(`    ${chalk.cyan("ctx setup")}           ${chalk.dim("Interactive setup wizard")}`);
-    console.log(`    ${chalk.cyan("ctx init")}            ${chalk.dim("Manual init (creates ctx.yaml)")}`);
+    console.log(`    ${chalk.cyan("ctx setup")}           ${chalk.dim("Detect sources, write ctx.yaml, compile the wiki")}`);
+    console.log(chalk.dim(`                        (ctx init and ctx go are aliases)`));
     console.log();
     console.log(`  ${chalk.dim("Learn more:")}  ${chalk.cyan("ctx help")}`);
     console.log(`  ${chalk.dim("Docs:")}        ${chalk.dim("https://github.com/imamchishty/withctx")}`);

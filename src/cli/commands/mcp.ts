@@ -27,7 +27,7 @@ export function registerMcpCommand(program: Command): void {
 
           if (!ctxDir.exists()) {
             console.error(
-              chalk.red("No .ctx/ directory found. Run 'ctx init' first.")
+              chalk.red("No .ctx/ directory found. Run 'ctx setup' first.")
             );
             process.exit(1);
           }

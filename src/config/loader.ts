@@ -52,7 +52,7 @@ export function loadConfig(configPath?: string): CtxConfig {
   const path = configPath ?? findConfigFile();
   if (!path) {
     throw new Error(
-      `No ${CONFIG_FILENAME} found. Run 'ctx init' to create one.`
+      `No ${CONFIG_FILENAME} found. Run 'ctx setup' to create one.`
     );
   }
 
@@ -69,7 +69,7 @@ export function getProjectRoot(configPath?: string): string {
   const path = configPath ?? findConfigFile();
   if (!path) {
     throw new Error(
-      `No ${CONFIG_FILENAME} found. Run 'ctx init' to create one.`
+      `No ${CONFIG_FILENAME} found. Run 'ctx setup' to create one.`
     );
   }
   return resolve(path, "..");

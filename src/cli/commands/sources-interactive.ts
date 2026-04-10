@@ -884,7 +884,7 @@ export async function runInteractiveSourceAdd(
 ): Promise<void> {
   const configPath = findConfigFile();
   if (!configPath) {
-    console.error(chalk.red("No ctx.yaml found. Run 'ctx init' first."));
+    console.error(chalk.red("No ctx.yaml found. Run 'ctx setup' first."));
     process.exit(1);
   }
 
@@ -966,7 +966,7 @@ export async function runInteractiveSourceAdd(
       );
       console.log(
         chalk.dim(
-          "  Alternatively, run 'ctx go' to compile your full wiki."
+          "  Alternatively, run 'ctx setup' to compile your full wiki."
         )
       );
     }

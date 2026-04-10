@@ -192,7 +192,7 @@ export function registerConfigCommand(program: Command): void {
       try {
         const configPath = findConfigFile();
         if (!configPath) {
-          console.error(chalk.red("No ctx.yaml found. Run 'ctx init' first."));
+          console.error(chalk.red("No ctx.yaml found. Run 'ctx setup' first."));
           process.exit(1);
         }
 
@@ -227,7 +227,7 @@ export function registerConfigCommand(program: Command): void {
       try {
         const configPath = findConfigFile();
         if (!configPath) {
-          console.error(chalk.red("No ctx.yaml found. Run 'ctx init' first."));
+          console.error(chalk.red("No ctx.yaml found. Run 'ctx setup' first."));
           process.exit(1);
         }
 

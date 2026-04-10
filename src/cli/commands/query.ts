@@ -218,8 +218,8 @@ export function registerQueryCommand(program: Command): void {
         const ctxDir = new CtxDirectory(projectRoot);
 
         if (!ctxDir.exists()) {
-          spinner?.fail(chalk.red("No .ctx/ directory found. Run 'ctx init' first."));
-          if (raw) console.error("No .ctx/ directory found. Run 'ctx init' first.");
+          spinner?.fail(chalk.red("No .ctx/ directory found. Run 'ctx setup' first."));
+          if (raw) console.error("No .ctx/ directory found. Run 'ctx setup' first.");
           process.exit(1);
         }
 

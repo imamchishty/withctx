@@ -22,7 +22,7 @@ export function createMcpServer(): {
   const ctxDir = new CtxDirectory(projectRoot);
 
   if (!ctxDir.exists()) {
-    throw new Error("No .ctx/ directory found. Run 'ctx init' first.");
+    throw new Error("No .ctx/ directory found. Run 'ctx setup' first.");
   }
 
   const pageManager = new PageManager(ctxDir);

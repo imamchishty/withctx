@@ -114,7 +114,7 @@ export function registerTodosCommand(program: Command): void {
             if (!ctxDir.exists()) {
               console.log(
                 chalk.yellow(
-                  "  .ctx/ directory not found — run 'ctx init' first to enable --write."
+                  "  .ctx/ directory not found — run 'ctx setup' first to enable --write."
                 )
               );
               return;

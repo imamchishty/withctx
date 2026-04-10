@@ -32,7 +32,7 @@ export function registerEmbedCommand(program: Command): void {
 
         if (!ctxDir.exists()) {
           spinner.fail(
-            chalk.red("No .ctx/ directory found. Run 'ctx init' first.")
+            chalk.red("No .ctx/ directory found. Run 'ctx setup' first.")
           );
           process.exit(1);
         }

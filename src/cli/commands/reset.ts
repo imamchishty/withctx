@@ -38,7 +38,7 @@ export function registerResetCommand(program: Command): void {
         const ctxDir = new CtxDirectory(projectRoot);
 
         if (!ctxDir.exists()) {
-          console.error(chalk.red("No .ctx/ directory found. Run 'ctx init' first."));
+          console.error(chalk.red("No .ctx/ directory found. Run 'ctx setup' first."));
           process.exit(1);
         }
 
