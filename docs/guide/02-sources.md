@@ -84,7 +84,7 @@ sources:
     include: ["README.md", "docs/**/*.md", "ARCHITECTURE.md"]
 ```
 
-For multi-repo setups see the cross-repo example in `04-recipes.md`.
+For multi-repo setups (monorepo, sibling repos, remote-only, or CI-driven shared wiki) see the **Multi-repo / monorepo / microservices** recipe in [04-recipes.md](04-recipes.md).
 
 ---
 

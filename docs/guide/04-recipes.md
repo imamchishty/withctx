@@ -74,17 +74,155 @@ Three things that drop cost fast:
 
 ---
 
-## "Multi-repo monorepo / microservices"
+## "Multi-repo / monorepo / microservices"
+
+withctx supports three multi-repo patterns. Pick the one that matches how your code is laid out.
+
+### Pattern A — monorepo (all repos in one directory tree)
+
+You already work from a single root. Use `local` and let glob patterns split it up.
+
+```yaml
+sources:
+  - type: local
+    paths:
+      - "./packages/api/**"
+      - "./packages/web/**"
+      - "./packages/worker/**"
+    exclude: ["**/node_modules", "**/dist", "**/.next"]
+
+wiki:
+  group_by: package         # one wiki section per package
+```
+
+The wiki is laid out as:
+```
+.ctx/context/
+├── repos/
+│   ├── api/architecture.md
+│   ├── web/architecture.md
+│   └── worker/architecture.md
+└── cross-repo/
+    └── shared-conventions.md
+```
+
+### Pattern B — sibling repos on disk (the "meta directory" approach)
+
+You have several repos checked out side-by-side and want one wiki across all of them:
+
+```
+~/work/acme/
+├── ctx.yaml          ← run ctx from here
+├── api/              ← separate git repo
+├── web/              ← separate git repo
+└── worker/           ← separate git repo
+```
+
+```yaml
+sources:
+  - type: local
+    paths:
+      - "./api/**/*.md"
+      - "./web/**/*.md"
+      - "./worker/**/*.md"
+      - "./api/src/**"
+      - "./web/src/**"
+      - "./worker/src/**"
+    exclude: ["**/node_modules", "**/dist"]
+```
+
+Run `ctx go` from `~/work/acme`. The wiki captures cross-repo conventions in one place without anyone needing a monorepo migration.
+
+### Pattern C — remote multi-repo (GitHub)
+
+You don't want to check out 12 repos locally. Pull from GitHub instead:
 
 ```yaml
 sources:
   - type: github
-    repos: [acme/api, acme/web, acme/worker]
-  - type: local
-    paths: ["./packages/*/README.md", "./packages/*/ARCHITECTURE.md"]
+    repos:
+      - acme/api
+      - acme/web
+      - acme/worker
+      - acme/billing
+      - acme/notifications
+    include:
+      - "README.md"
+      - "ARCHITECTURE.md"
+      - "docs/**/*.md"
+      - "src/**/*.{ts,js,py,go}"
+    branch: main
 ```
 
-withctx detects cross-repo references in markdown links and surfaces them in the wiki under `cross-repo/`.
+GitHub auth: `export GITHUB_TOKEN=ghp_...` (`repo` + `read:org`).
+
+You can mix this with `local` for the *one* repo you have checked out and want code-level depth on:
+
+```yaml
+sources:
+  - type: local            # the repo you're actively working in
+    paths: ["."]
+  - type: github           # all the others, README/ARCHITECTURE only
+    repos: [acme/web, acme/worker, acme/billing]
+    include: ["README.md", "ARCHITECTURE.md", "docs/**/*.md"]
+```
+
+### Cross-repo links
+
+withctx detects markdown links between repos (e.g. `[orders service](../orders/README.md)`) and surfaces them in `.ctx/context/cross-repo/`. So if `api`'s README links to `worker`'s deployment doc, the wiki will show that relationship.
+
+It also pairs with multi-space Confluence — give it the project's spaces and it will resolve cross-space page links the same way:
+
+```yaml
+sources:
+  - type: confluence
+    space: [ENG, OPS, ARCH]    # array, not string
+```
+
+### CI/CD pattern: one shared wiki, many repos triggering rebuild
+
+The "right" way to keep the wiki fresh in a multi-repo org:
+
+1. Commit `.ctx/context/` to one designated repo (e.g. `acme/wiki`) — it's just markdown.
+2. Add a GitHub Action in *each* source repo that calls a `repository_dispatch` on `acme/wiki` whenever main changes.
+3. The wiki repo's CI runs `ctx sync && git commit -am "wiki: sync from $REPO" && git push`.
+
+```yaml
+# .github/workflows/sync-wiki.yml in acme/wiki
+on:
+  repository_dispatch:
+    types: [source-changed]
+  schedule:
+    - cron: "0 6 * * *"        # daily safety net
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm install -g withctx
+      - run: ctx sync --force
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: |
+          git config user.name "withctx-bot"
+          git config user.email "bot@acme.com"
+          git add .ctx/context
+          git diff --cached --quiet || git commit -m "wiki: scheduled sync"
+          git push
+```
+
+Devs hit one wiki. Cost is centralised. Token usage is observable via `ctx costs` on the wiki repo's CI machine.
+
+### Sanity checks for multi-repo
+
+```bash
+ctx doctor               # confirms every configured source's creds
+ctx status               # which pages came from which repo
+ctx sources              # list configured sources with last-seen counts
+```
 
 ---
 
