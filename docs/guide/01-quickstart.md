@@ -58,3 +58,13 @@ ctx doctor      # verifies setup, credentials, dependencies
 ctx status      # wiki health dashboard
 ctx costs       # token usage so far
 ```
+
+## Update
+
+```bash
+ctx --version                       # check what you have
+npm update -g withctx               # update to the latest
+npm install -g withctx@1.3.0        # pin to a specific version
+```
+
+After an update, run `ctx doctor` once. If a sync index format changed, it will tell you to run `ctx sync --force` once.
