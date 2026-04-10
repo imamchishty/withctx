@@ -5,7 +5,7 @@ import { createInterface } from "node:readline";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
-import { ClaudeClient } from "../../claude/client.js";
+import { createLLMFromCtxConfig } from "../../llm/index.js";
 import { ConnectorRegistry } from "../../connectors/registry.js";
 import { LocalFilesConnector } from "../../connectors/local-files.js";
 import { safeGenerate } from "../../connectors/safe-generator.js";
@@ -472,7 +472,7 @@ export function registerIngestCommand(program: Command): void {
         }
 
         // Check Claude availability
-        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
+        const claude = createLLMFromCtxConfig(config, "ingest");
         const available = await claude.isAvailable();
         if (!available) {
           console.error(

@@ -7,7 +7,7 @@ import { dirname, join } from "node:path";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
-import { ClaudeClient } from "../../claude/client.js";
+import { createLLMFromCtxConfig } from "../../llm/index.js";
 import { recordCall } from "../../usage/recorder.js";
 import { VectorManager } from "../../vector/index.js";
 import type { SearchResult, VectorStoreConfig } from "../../types/vector.js";
@@ -287,9 +287,8 @@ export function registerQueryCommand(program: Command): void {
           }
         }
 
-        // --- 4. Call Claude ----------------------------------------------
-        const queryModel = config.costs?.model ?? "claude-sonnet-4-20250514";
-        const claude = new ClaudeClient(queryModel, { baseURL: config.ai?.base_url });
+        // --- 4. Call the LLM ---------------------------------------------
+        const claude = createLLMFromCtxConfig(config, "query");
         const askSpinner = raw ? null : ora("Asking Claude...").start();
 
         const systemPrompt =
@@ -389,7 +388,7 @@ ${question}
 
         // Persist call to .ctx/usage.jsonl history.
         if (response.tokensUsed) {
-          recordCall(ctxDir, "query", queryModel, {
+          recordCall(ctxDir, "query", claude.getModel(), {
             input: response.tokensUsed.input,
             output: response.tokensUsed.output,
             cacheRead: response.tokensUsed.cacheRead ?? 0,

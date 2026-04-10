@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
-import { ClaudeClient } from "../../claude/client.js";
+import { createLLMFromCtxConfig } from "../../llm/index.js";
 import { ConnectorRegistry } from "../../connectors/registry.js";
 import { LocalFilesConnector } from "../../connectors/local-files.js";
 import { HashIndex, type SyncIndex, type SyncIndexEntry } from "../../sync/hash-index.js";
@@ -264,7 +264,7 @@ export function registerSyncCommand(program: Command): void {
         }
 
         // Check Claude availability
-        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
+        const claude = createLLMFromCtxConfig(config, "sync");
         const available = await claude.isAvailable();
         if (!available) {
           ora().fail(chalk.red("Claude CLI not found."));

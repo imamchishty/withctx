@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
-import { ClaudeClient } from "../../claude/client.js";
+import { createLLMFromCtxConfig } from "../../llm/index.js";
 import { CostTracker } from "../../costs/tracker.js";
 import { recordCall } from "../../usage/recorder.js";
 
@@ -314,7 +314,7 @@ export function registerChangelogCommand(program: Command): void {
         // Send to Claude
         spinner.text = "Generating changelog with Claude...";
 
-        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
+        const claude = createLLMFromCtxConfig(config, "changelog");
         const maxTokens = options.maxTokens ? parseInt(options.maxTokens, 10) : 4096;
 
         const response = contextFiles.length > 0

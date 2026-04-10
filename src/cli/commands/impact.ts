@@ -5,7 +5,8 @@ import { writeFileSync } from "node:fs";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
-import { ClaudeClient, totalTokens } from "../../claude/client.js";
+import { totalTokens } from "../../claude/client.js";
+import { createLLMFromCtxConfig } from "../../llm/index.js";
 import { recordCall } from "../../usage/recorder.js";
 
 type OutputFormat = "terminal" | "markdown" | "json";
@@ -206,7 +207,7 @@ export function registerImpactCommand(program: Command): void {
         // Send to Claude
         spinner.text = `Analyzing impact of: "${change.slice(0, 60)}${change.length > 60 ? "..." : ""}"`;
 
-        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
+        const claude = createLLMFromCtxConfig(config, "impact");
         const maxTokens = options.maxTokens ? parseInt(options.maxTokens, 10) : 8192;
 
         const response = await claude.promptWithFiles(prompt, contextFiles, {

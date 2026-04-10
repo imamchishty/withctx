@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { PageManager } from "../../wiki/pages.js";
-import { ClaudeClient } from "../../claude/client.js";
+import { createLLMFromCtxConfig } from "../../llm/index.js";
 import { runLint, type LintRuleName } from "../../lint/linter.js";
 import { writeLintReportFile } from "../../lint/reporter.js";
 import { SourceCacheManager } from "../../storage/sources.js";
@@ -47,8 +47,7 @@ export async function registerLintRoutes(
       const pm = new PageManager(fastify.ctx);
       const body = request.body ?? {};
 
-      const model = fastify.config.costs?.model ?? "claude-sonnet-4";
-      const claude = new ClaudeClient(model, { baseURL: fastify.config.ai?.base_url });
+      const claude = createLLMFromCtxConfig(fastify.config, "lint");
 
       // Get source freshness for staleness checks
       const sourceCache = new SourceCacheManager(fastify.ctx);

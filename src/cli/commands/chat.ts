@@ -4,7 +4,7 @@ import { createInterface } from "node:readline";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
-import { ClaudeClient } from "../../claude/client.js";
+import { createLLMFromCtxConfig } from "../../llm/index.js";
 
 interface ChatMessage {
   role: "user" | "assistant";
@@ -50,7 +50,7 @@ export function registerChatCommand(program: Command): void {
           .join("\n\n");
 
         // Check Claude
-        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
+        const claude = createLLMFromCtxConfig(config, "chat");
         const available = await claude.isAvailable();
         if (!available) {
           console.error(chalk.red("Claude CLI not found."));

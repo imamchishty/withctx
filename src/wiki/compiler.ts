@@ -3,7 +3,8 @@ import type { WikiPage } from "../types/page.js";
 import type { PageManager } from "./pages.js";
 import type { IndexManager } from "./index-manager.js";
 import type { LogManager } from "./log-manager.js";
-import { ClaudeClient } from "../claude/client.js";
+import type { LLMProvider } from "../llm/types.js";
+import { createLLMProvider } from "../llm/index.js";
 import {
   COMPILE_SYSTEM_PROMPT,
   formatCompilePrompt,
@@ -73,18 +74,18 @@ export class WikiCompiler {
   private pages: PageManager;
   private index: IndexManager;
   private log: LogManager;
-  private claude: ClaudeClient;
+  private claude: LLMProvider;
 
   constructor(
     pages: PageManager,
     index: IndexManager,
     log: LogManager,
-    claude?: ClaudeClient
+    claude?: LLMProvider
   ) {
     this.pages = pages;
     this.index = index;
     this.log = log;
-    this.claude = claude ?? new ClaudeClient();
+    this.claude = claude ?? createLLMProvider();
   }
 
   /**
@@ -241,7 +242,7 @@ export class WikiCompiler {
           const description = await processImage(
             tempPath,
             `Image from document: ${doc.title}`,
-            { baseURL: this.claude.getBaseURL() }
+            this.claude
           );
 
           augmentedContent += `\n\n### Image: ${image.name}\n\n${description}`;

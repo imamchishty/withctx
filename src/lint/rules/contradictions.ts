@@ -1,12 +1,12 @@
 import type { WikiPage, LintIssue } from "../../types/page.js";
-import type { ClaudeClient } from "../../claude/client.js";
+import type { LLMProvider } from "../../llm/types.js";
 
 /**
- * Detects contradictions between pairs of wiki pages using Claude.
+ * Detects contradictions between pairs of wiki pages using the configured LLM.
  */
 export async function detectContradictions(
   pages: WikiPage[],
-  claude: ClaudeClient
+  claude: LLMProvider
 ): Promise<LintIssue[]> {
   const issues: LintIssue[] = [];
 

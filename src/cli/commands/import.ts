@@ -6,7 +6,7 @@ import { resolve, basename, extname } from "node:path";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
-import { ClaudeClient } from "../../claude/client.js";
+import { createLLMFromCtxConfig } from "../../llm/index.js";
 
 interface ImportOptions {
   as?: string;
@@ -120,7 +120,7 @@ export function registerImportCommand(program: Command): void {
         }
 
         // Check Claude availability
-        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
+        const claude = createLLMFromCtxConfig(config, "import");
         const compileSpinner = ora(
           asPage
             ? `Importing as ${chalk.cyan(asPage)} with Claude...`

@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
-import { ClaudeClient } from "../../claude/client.js";
+import { createLLMFromCtxConfig } from "../../llm/index.js";
 import { detectDocType, type DocType } from "../../connectors/markdown-processor.js";
 
 // ── Role definitions ────────────────────────────────────────────────────
@@ -160,7 +160,7 @@ export function registerOnboardCommand(program: Command): void {
         // Generate with Claude
         spinner.text = "Generating onboarding guide with Claude...";
 
-        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
+        const claude = createLLMFromCtxConfig(config, "onboard");
 
         const nameClause = options.name ? ` Their name is ${options.name}.` : "";
         const roleLabel = role === "general" ? "new team member" : `new ${role} engineer`;

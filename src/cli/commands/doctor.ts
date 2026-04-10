@@ -6,7 +6,7 @@ import { resolve, join } from "node:path";
 import { findConfigFile, loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
-import { ClaudeClient } from "../../claude/client.js";
+import { createLLMFromCtxConfig } from "../../llm/index.js";
 import type { CtxConfig } from "../../types/config.js";
 import { icons, divider } from "../utils/ui.js";
 
@@ -145,53 +145,111 @@ function checkCtxDirectory(): CheckResult {
   };
 }
 
-function checkApiKey(): CheckResult {
-  if (envIsSet("ANTHROPIC_API_KEY")) {
-    const key = process.env["ANTHROPIC_API_KEY"]!;
+// Maps a provider name to (a) the env var holding its API key and (b) the
+// default base URL we expect to hit. Kept in one place so the check stays
+// honest as we add providers.
+const PROVIDER_META: Record<
+  "anthropic" | "openai" | "google" | "ollama",
+  {
+    envVar: string;
+    keyRequired: boolean;
+    defaultBaseURL: string;
+    signupUrl: string;
+  }
+> = {
+  anthropic: {
+    envVar: "ANTHROPIC_API_KEY",
+    keyRequired: true,
+    defaultBaseURL: "https://api.anthropic.com",
+    signupUrl: "https://console.anthropic.com",
+  },
+  openai: {
+    envVar: "OPENAI_API_KEY",
+    keyRequired: true,
+    defaultBaseURL: "https://api.openai.com/v1",
+    signupUrl: "https://platform.openai.com",
+  },
+  google: {
+    envVar: "GOOGLE_API_KEY",
+    keyRequired: true,
+    defaultBaseURL: "https://generativelanguage.googleapis.com",
+    signupUrl: "https://aistudio.google.com",
+  },
+  ollama: {
+    envVar: "",
+    keyRequired: false,
+    defaultBaseURL: "http://localhost:11434",
+    signupUrl: "https://ollama.com/download",
+  },
+};
+
+function resolveProviderName(
+  config?: CtxConfig | null
+): "anthropic" | "openai" | "google" | "ollama" {
+  return config?.ai?.provider ?? "anthropic";
+}
+
+function checkApiKey(config?: CtxConfig | null): CheckResult {
+  const providerName = resolveProviderName(config);
+  const meta = PROVIDER_META[providerName];
+
+  if (!meta.keyRequired) {
+    return {
+      label: `API key (${providerName})`,
+      status: "pass",
+      message: "Not required — local provider",
+    };
+  }
+
+  if (envIsSet(meta.envVar)) {
+    const key = process.env[meta.envVar]!;
     const masked = key.slice(0, 8) + "..." + key.slice(-4);
     return {
-      label: "ANTHROPIC_API_KEY",
+      label: meta.envVar,
       status: "pass",
       message: masked,
     };
   }
 
   return {
-    label: "ANTHROPIC_API_KEY",
+    label: meta.envVar,
     status: "fail",
     message: "Not set",
-    fix: "Export the key: export ANTHROPIC_API_KEY=sk-ant-...",
+    fix: `Export the key: export ${meta.envVar}=<your-key> (get one at ${meta.signupUrl})`,
   };
 }
 
-async function checkApiConnection(config?: CtxConfig | null): Promise<CheckResult> {
-  if (!envIsSet("ANTHROPIC_API_KEY")) {
+async function checkApiConnection(
+  config?: CtxConfig | null
+): Promise<CheckResult> {
+  const providerName = resolveProviderName(config);
+  const meta = PROVIDER_META[providerName];
+
+  if (meta.keyRequired && !envIsSet(meta.envVar)) {
     return {
       label: "API connection",
       status: "fail",
-      message: "Skipped — no API key",
-      fix: "Set ANTHROPIC_API_KEY first.",
+      message: `Skipped — ${meta.envVar} not set`,
+      fix: `Set ${meta.envVar} first.`,
     };
   }
 
   const spinner = ora({ text: "Testing API connection...", indent: 2 }).start();
 
   try {
-    const client = new ClaudeClient(
-      config?.costs?.model ?? "claude-sonnet-4-20250514",
-      { baseURL: config?.ai?.base_url }
-    );
-    const available = await client.isAvailable();
-    const baseURL = client.getBaseURL();
-    const isDefault = baseURL === "https://api.anthropic.com";
+    const llm = createLLMFromCtxConfig(config);
+    const available = await llm.isAvailable();
+    const baseURL = llm.getBaseURL();
+    const isDefault = baseURL === meta.defaultBaseURL;
     const urlSuffix = isDefault ? "" : ` via ${baseURL}`;
+    const providerBadge = chalk.dim(`[${providerName}]`);
 
     if (available) {
       spinner.stop();
       return {
         label: "API connection",
         status: "pass",
-        message: `Connected (${client.getModel()})${urlSuffix}`,
+        message: `${providerBadge} Connected (${llm.getModel()})${urlSuffix}`,
       };
     }
 
@@ -199,10 +257,10 @@ async function checkApiConnection(config?: CtxConfig | null): Promise<CheckResul
     return {
       label: "API connection",
       status: "fail",
-      message: `API returned no content${urlSuffix}`,
+      message: `${providerBadge} API returned no content${urlSuffix}`,
       fix: isDefault
-        ? "Check your API key is valid and has available credits at https://console.anthropic.com"
-        : `Check that ${baseURL} is reachable and speaks the Anthropic Messages API.`,
+        ? `Check your ${meta.envVar || "provider"} is valid and has available credits at ${meta.signupUrl}`
+        : `Check that ${baseURL} is reachable and speaks the ${providerName} API.`,
     };
   } catch (error) {
     spinner.stop();
@@ -210,8 +268,8 @@ async function checkApiConnection(config?: CtxConfig | null): Promise<CheckResul
     return {
       label: "API connection",
       status: "fail",
-      message: msg,
-      fix: "Check your API key and network connection. Visit https://console.anthropic.com to verify your account.",
+      message: `[${providerName}] ${msg}`,
+      fix: `Check your credentials and network connection. Provider: ${providerName}. Docs: ${meta.signupUrl}.`,
     };
   }
 }
@@ -507,12 +565,8 @@ export function registerDoctorCommand(program: Command): void {
       // ----- Environment checks -----
       console.log(chalk.bold("Environment"));
 
-      results.push(checkNodeVersion());
-      results.push(checkConfigFile());
-      results.push(checkCtxDirectory());
-      results.push(checkApiKey());
-
-      // Load config early so the API check can honour ai.base_url.
+      // Load config FIRST so the key + connection checks can honour
+      // ai.provider / ai.base_url instead of assuming Anthropic.
       const configPath = findConfigFile();
       let config: CtxConfig | null = null;
       let projectRoot: string | null = null;
@@ -531,6 +585,11 @@ export function registerDoctorCommand(program: Command): void {
           });
         }
       }
+
+      results.push(checkNodeVersion());
+      results.push(checkConfigFile());
+      results.push(checkCtxDirectory());
+      results.push(checkApiKey(config));
 
       const apiResult = await checkApiConnection(config);
       results.push(apiResult);

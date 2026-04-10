@@ -123,6 +123,14 @@ export class OllamaProvider implements LLMProvider {
     }
   }
 
+  getModel(): string {
+    return this.defaultModel;
+  }
+
+  getBaseURL(): string {
+    return this.baseUrl;
+  }
+
   private async chat(
     messages: OllamaChatMessage[],
     options?: LLMOptions

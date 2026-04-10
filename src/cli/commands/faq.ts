@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
-import { ClaudeClient } from "../../claude/client.js";
+import { createLLMFromCtxConfig } from "../../llm/index.js";
 import { CostTracker } from "../../costs/tracker.js";
 import { recordCall } from "../../usage/recorder.js";
 
@@ -234,10 +234,7 @@ export function registerFaqCommand(program: Command): void {
         const count = options.count ? parseInt(options.count, 10) : 20;
         spinner.text = `Generating ${count} Q&As from ${contextFiles.length} wiki pages...`;
 
-        const claude = new ClaudeClient(
-          config.costs?.model ?? "claude-sonnet-4",
-          { baseURL: config.ai?.base_url }
-        );
+        const claude = createLLMFromCtxConfig(config, "faq");
         const costTracker = new CostTracker(ctxDir, {
           budget: config.costs?.budget,
           alertAt: config.costs?.alert_at,

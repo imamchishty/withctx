@@ -7,7 +7,7 @@ import { stringify as yamlStringify, parse as parseYaml } from "yaml";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { findConfigFile, loadConfig, getProjectRoot } from "../../config/loader.js";
 import { PageManager } from "../../wiki/pages.js";
-import { ClaudeClient } from "../../claude/client.js";
+import { createLLMFromCtxConfig } from "../../llm/index.js";
 import { LocalFilesConnector } from "../../connectors/local-files.js";
 import type { RawDocument } from "../../types/source.js";
 import type { CtxConfig } from "../../types/config.js";
@@ -381,7 +381,7 @@ async function runIngest(
 
   spinner.text = `Compiling ${allDocs.length} documents into wiki...`;
 
-  const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
+  const claude = createLLMFromCtxConfig(config, "go");
   let pageCount = 0;
   let tokenCount = 0;
 

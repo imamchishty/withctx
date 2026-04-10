@@ -6,7 +6,7 @@ import { resolve } from "node:path";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
-import { ClaudeClient } from "../../claude/client.js";
+import { createLLMFromCtxConfig } from "../../llm/index.js";
 import type { PackOptions } from "../../types/page.js";
 
 interface PackCliOptions {
@@ -117,7 +117,7 @@ export function registerPackCommand(program: Command): void {
         // If query-focused, use Claude to rank relevance
         if (options.query) {
           spinner.text = "Ranking pages by relevance...";
-          const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
+          const claude = createLLMFromCtxConfig(config, "pack");
           const available = await claude.isAvailable();
 
           if (available) {

@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
-import { ClaudeClient } from "../../claude/client.js";
+import { createLLMFromCtxConfig } from "../../llm/index.js";
 import { runInteractiveSourceAdd, SOURCE_TYPE_NAMES } from "./sources-interactive.js";
 
 type NoteType = "note" | "decision" | "convention" | "context" | "correction";
@@ -118,7 +118,7 @@ Include an updated index.md if you created a new page.
 ${existingContent || "No existing pages yet."}
 `;
 
-        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
+        const claude = createLLMFromCtxConfig(config, "add");
         const available = await claude.isAvailable();
         if (!available) {
           spinner.fail(chalk.red("Claude CLI not found."));

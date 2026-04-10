@@ -4,7 +4,7 @@ import ora from "ora";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
-import { ClaudeClient } from "../../claude/client.js";
+import { createLLMFromCtxConfig } from "../../llm/index.js";
 import type { LintIssue, LintReport } from "../../types/page.js";
 
 interface LintOptions {
@@ -135,7 +135,7 @@ export function registerLintCommand(program: Command): void {
         spinner.text = "Checking for contradictions with Claude...";
         let claudeIssues: LintIssue[] = [];
 
-        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
+        const claude = createLLMFromCtxConfig(config, "lint");
         const available = await claude.isAvailable();
 
         if (available) {

@@ -1,35 +1,36 @@
-import { ClaudeClient } from "./client.js";
-import type { ClaudeResponse } from "./client.js";
+import type { LLMProvider, LLMResponse } from "../llm/types.js";
 import { existsSync } from "node:fs";
 
 /**
- * Process an image using Claude's vision capabilities.
+ * Process an image using the configured LLM provider's vision capabilities.
  * Extracts text descriptions suitable for inclusion in wiki pages.
  *
- * Uses the Anthropic SDK with native base64 image support.
+ * Requires a provider that implements `analyzeImage` (Anthropic, OpenAI,
+ * Google — all do out of the box; Ollama only with vision-capable models).
  *
  * @param imagePath - Absolute path to the image file
- * @param context - Additional context about what the image represents
+ * @param context  - Additional context about what the image represents
+ * @param llm      - The LLMProvider to route the vision call through.
  * @returns Text description of the image content
  */
 export async function processImage(
   imagePath: string,
   context: string,
-  options?: { baseURL?: string }
+  llm: LLMProvider
 ): Promise<string> {
   if (!existsSync(imagePath)) {
     throw new Error(`Image not found: ${imagePath}`);
   }
 
-  const client = new ClaudeClient("claude-haiku-3.5-20241022", {
-    baseURL: options?.baseURL,
-  }); // Vision on cheap model
+  if (!llm.analyzeImage) {
+    return `_Image: ${imagePath} (provider "${llm.name}" does not support vision)_`;
+  }
 
   const prompt = buildVisionPrompt(context);
 
-  let response: ClaudeResponse;
+  let response: LLMResponse;
   try {
-    response = await client.analyzeImage(imagePath, prompt);
+    response = await llm.analyzeImage(imagePath, prompt);
   } catch (error) {
     const message =
       error instanceof Error ? error.message : String(error);

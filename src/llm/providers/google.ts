@@ -24,15 +24,28 @@ export class GoogleProvider implements LLMProvider {
   readonly name = "google";
   private genAI: GoogleGenerativeAI;
   private defaultModel: string;
+  private baseURL: string;
 
   constructor(config?: LLMConfig) {
     const apiKey = config?.apiKey ?? process.env.GOOGLE_API_KEY ?? "";
     this.defaultModel = config?.model ?? "gemini-2.0-flash";
     this.genAI = new GoogleGenerativeAI(apiKey);
+    // The Google SDK doesn't expose a configurable base URL — we track it
+    // for reporting parity with other providers.
+    this.baseURL =
+      config?.baseUrl ?? "https://generativelanguage.googleapis.com";
+  }
+
+  getModel(): string {
+    return this.defaultModel;
+  }
+
+  getBaseURL(): string {
+    return this.baseURL;
   }
 
   async prompt(text: string, options?: LLMOptions): Promise<LLMResponse> {
-    const model = this.getModel(options);
+    const model = this.getGenerativeModel(options);
 
     const result = await model.generateContent({
       contents: [{ role: "user", parts: [{ text }] }],
@@ -57,7 +70,7 @@ export class GoogleProvider implements LLMProvider {
     files: Array<{ path: string; content: string }>,
     options?: LLMOptions
   ): Promise<LLMResponse> {
-    const model = this.getModel(options);
+    const model = this.getGenerativeModel(options);
 
     // Build file context
     let fileContext = "";
@@ -86,7 +99,7 @@ export class GoogleProvider implements LLMProvider {
     messages: LLMMessage[],
     options?: LLMOptions
   ): Promise<LLMResponse> {
-    const model = this.getModel(options);
+    const model = this.getGenerativeModel(options);
 
     // Convert messages to Gemini format
     // Gemini doesn't have a system role in contents — prepend it as context
@@ -139,7 +152,7 @@ export class GoogleProvider implements LLMProvider {
     prompt: string,
     options?: LLMOptions
   ): Promise<LLMResponse> {
-    const model = this.getModel(options);
+    const model = this.getGenerativeModel(options);
     const ext = extname(imagePath).toLowerCase();
     const mimeType = IMAGE_MIME_TYPES[ext];
 
@@ -182,7 +195,7 @@ export class GoogleProvider implements LLMProvider {
     return !!process.env.GOOGLE_API_KEY;
   }
 
-  private getModel(options?: LLMOptions) {
+  private getGenerativeModel(options?: LLMOptions) {
     const modelName = options?.model ?? this.defaultModel;
 
     return this.genAI.getGenerativeModel({

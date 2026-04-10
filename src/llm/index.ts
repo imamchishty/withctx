@@ -1,4 +1,5 @@
 import type { LLMProvider, LLMConfig } from "./types.js";
+import type { CtxConfig } from "../types/config.js";
 import { AnthropicProvider } from "./providers/anthropic.js";
 import { OpenAIProvider } from "./providers/openai.js";
 import { GoogleProvider } from "./providers/google.js";
@@ -124,6 +125,67 @@ function detectProviderForModel(
   }
 
   return null;
+}
+
+/**
+ * Build an LLMProvider from a loaded `ctx.yaml` config, honouring the
+ * full precedence chain:
+ *
+ *   provider  = config.ai.provider            (default: "anthropic")
+ *   model     = config.ai.model
+ *             ?? config.costs.model           (legacy location)
+ *             ?? provider-specific default
+ *   base_url  = config.ai.base_url            (passes through to the SDK)
+ *   apiKey    = (left to env vars so secrets never land in config)
+ *
+ * If `operation` is given and `config.ai.models[operation]` is set, that
+ * model override wins — including auto-switching to a *different* provider
+ * when the override model name belongs elsewhere (e.g. `ingest: gpt-4o-mini`
+ * under an Anthropic default will route ingest through OpenAI).
+ *
+ * This is the single entry point every CLI command and server route should
+ * use — do not `new ClaudeClient(...)` directly.
+ */
+export function createLLMFromCtxConfig(
+  config: CtxConfig | null | undefined,
+  operation?: string
+): LLMProvider {
+  const ai = config?.ai;
+  const provider: LLMConfig["provider"] = ai?.provider ?? "anthropic";
+
+  // Legacy: costs.model was the original model setting, still honoured so we
+  // don't break existing ctx.yaml files.
+  const baseModel = ai?.model ?? config?.costs?.model;
+
+  const llmConfig: LLMConfig = {
+    provider,
+    ...(baseModel !== undefined && { model: baseModel }),
+    ...(ai?.base_url !== undefined && { baseUrl: ai.base_url }),
+    ...(ai?.models !== undefined && { models: ai.models }),
+  };
+
+  // Per-operation override — may switch providers entirely.
+  if (operation && ai?.models?.[operation]) {
+    const { provider: selected, model } = getProviderForOperation(
+      llmConfig,
+      operation
+    );
+    // getProviderForOperation doesn't know about base_url fall-through, so
+    // if the override stays on the same provider we don't need to do anything
+    // extra; if it crossed providers the new one uses its own defaults. This
+    // matches user expectation: base_url is scoped to the *primary* provider.
+    if (model && selected.getModel() !== model) {
+      // The returned provider instance may have been created without the
+      // override model baked in — re-create with it.
+      return createProviderByName(
+        detectProviderForModel(model) ?? provider,
+        { ...llmConfig, model }
+      );
+    }
+    return selected;
+  }
+
+  return createProviderByName(provider, llmConfig);
 }
 
 /**

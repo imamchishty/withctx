@@ -134,38 +134,84 @@ Use shell vars to switch JQL/CQL between dev and CI without forking config.
 
 ---
 
-## AI provider — point at a different endpoint
+## AI provider — swap out Anthropic
 
-By default withctx talks to `https://api.anthropic.com` using your `ANTHROPIC_API_KEY`. You can redirect it anywhere that speaks the Anthropic Messages API.
+withctx supports four LLM providers out of the box. Set `ai.provider` in `ctx.yaml` and withctx uses that provider's SDK — different wire protocol, different env var, different pricing.
+
+| Provider | `ai.provider` | Env var | Default model |
+|---|---|---|---|
+| Anthropic (default) | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-20250514` |
+| OpenAI | `openai` | `OPENAI_API_KEY` | `gpt-4o` |
+| Google Gemini | `google` | `GOOGLE_API_KEY` | `gemini-2.0-flash` |
+| Ollama (local) | `ollama` | — | `llama3` |
+
+### Examples
+
+**Anthropic through a gateway** (LiteLLM, Portkey, Cloudflare AI Gateway — anything Anthropic-compatible):
 
 ```yaml
 ai:
-  base_url: https://my-gateway.example.com    # any Anthropic-compatible endpoint
+  provider: anthropic
+  base_url: https://my-gateway.example.com
 ```
 
-Or via env var (the SDK picks it up automatically):
+**OpenAI-compatible endpoint** (OpenAI itself, Azure OpenAI via proxy, vLLM, LM Studio, any `/v1/chat/completions` server):
 
-```bash
-export ANTHROPIC_BASE_URL=https://my-gateway.example.com
+```yaml
+ai:
+  provider: openai
+  model: gpt-4o-mini
+  base_url: https://my-openai-gateway.example.com/v1   # optional — defaults to api.openai.com/v1
 ```
 
-The `ai.base_url` in `ctx.yaml` wins if both are set.
+**Local Ollama** — zero API keys, runs on your laptop:
 
-Common use cases:
+```yaml
+ai:
+  provider: ollama
+  model: llama3:70b
+  base_url: http://localhost:11434   # optional
+```
 
-| Use case | What to set |
-|---|---|
-| LLM gateway (LiteLLM, Portkey, Cloudflare AI Gateway) | `ai.base_url` to the gateway URL |
-| Corporate egress proxy | `ai.base_url` or `HTTPS_PROXY` env var |
-| Self-hosted Anthropic-compatible endpoint (vLLM, Bedrock Anthropic with a proxy) | `ai.base_url` to the local endpoint |
-| Mock server in tests | `ai.base_url` to the mock URL |
-| Split dev/prod keys across endpoints | per-environment `ctx.yaml` files |
+**Google Gemini**:
 
-Run `ctx doctor` after changing it — when `base_url` is not the default, the API-connection check prints the URL it's actually hitting so you can confirm.
+```yaml
+ai:
+  provider: google
+  model: gemini-2.0-flash
+```
+
+### Per-operation model overrides
+
+Mix providers inside a single project — cheap model for ingest, smart model for chat:
+
+```yaml
+ai:
+  provider: anthropic
+  model: claude-sonnet-4-20250514    # default for everything
+  models:
+    ingest: gpt-4o-mini              # auto-switches to OpenAI
+    query:  claude-sonnet-4-20250514
+    review: gemini-2.0-flash         # auto-switches to Google
+```
+
+withctx detects the provider from the model prefix (`claude-*` → anthropic, `gpt-*`/`o1-*`/`o3-*` → openai, `gemini-*` → google, `llama*`/`mistral*`/`qwen*` → ollama) so you just name the model.
+
+### Env-var fallbacks
+
+If `ai.base_url` is not set, withctx honours the SDK-native env var (`ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL`). The `ctx.yaml` value wins when both are set.
+
+### Verify the wiring
+
+Run `ctx doctor` after changing provider. It shows the resolved provider, the model, and the URL being hit:
 
 ```
-✓ API connection: Connected (claude-sonnet-4-20250514) via https://my-gateway.example.com
+✓ [anthropic] API connection: Connected (claude-sonnet-4-20250514)
+✓ [openai]    API connection: Connected (gpt-4o) via https://my-gateway.example.com/v1
+✓ [ollama]    API connection: Connected (llama3) via http://localhost:11434
 ```
+
+If you swap providers and forget the matching env var, `ctx doctor` tells you exactly which one to export.
 
 ---
 

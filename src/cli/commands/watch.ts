@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
-import { ClaudeClient } from "../../claude/client.js";
+import { createLLMFromCtxConfig } from "../../llm/index.js";
 import { ConnectorRegistry } from "../../connectors/registry.js";
 import { LocalFilesConnector } from "../../connectors/local-files.js";
 import type { RawDocument } from "../../types/source.js";
@@ -57,7 +57,7 @@ async function syncSource(
   console.log(chalk.cyan(`  [${timestamp()}] ${docs.length} changed document(s) from ${sourceName}`));
 
   // Check Claude availability
-  const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
+  const claude = createLLMFromCtxConfig(config, "watch");
   const available = await claude.isAvailable();
   if (!available) {
     console.log(chalk.red(`  [${timestamp()}] Claude API not available — skipping compilation`));

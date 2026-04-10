@@ -1,5 +1,5 @@
 import type { WikiPage, LintReport, LintIssue } from "../types/page.js";
-import type { ClaudeClient } from "../claude/client.js";
+import type { LLMProvider } from "../llm/types.js";
 import { PageManager } from "../wiki/pages.js";
 import { detectContradictions } from "./rules/contradictions.js";
 import { detectStaleness, type StalenessOptions } from "./rules/staleness.js";
@@ -13,8 +13,8 @@ export interface LintOptions {
   rules?: LintRuleName[];
   /** Staleness configuration. */
   staleness?: StalenessOptions;
-  /** Claude client — required for contradiction detection. */
-  claude?: ClaudeClient;
+  /** LLM provider — required for contradiction detection. */
+  claude?: LLMProvider;
 }
 
 /**

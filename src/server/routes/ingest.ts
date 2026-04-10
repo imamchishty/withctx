@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { PageManager } from "../../wiki/pages.js";
-import { ClaudeClient } from "../../claude/client.js";
+import { createLLMFromCtxConfig } from "../../llm/index.js";
 import { SourceCacheManager } from "../../storage/sources.js";
 import type { SourceType } from "../../types/source.js";
 
@@ -82,8 +82,7 @@ async function ingestDirectContent(
   body: IngestBody
 ): Promise<{ pagesCreated: number; pagesUpdated: number; message: string }> {
   const pm = new PageManager(fastify.ctx);
-  const model = fastify.config.costs?.model ?? "claude-sonnet-4";
-  const claude = new ClaudeClient(model, { baseURL: fastify.config.ai?.base_url });
+  const claude = createLLMFromCtxConfig(fastify.config, "ingest");
 
   const title = body.title ?? "Untitled Document";
   const content = body.content ?? "";

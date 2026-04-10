@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { PageManager } from "../../wiki/pages.js";
-import { ClaudeClient } from "../../claude/client.js";
+import { createLLMFromCtxConfig } from "../../llm/index.js";
 import type { QueryResult } from "../../types/page.js";
 
 interface QueryBody {
@@ -61,8 +61,7 @@ export async function registerQueryRoutes(
         content: page.content,
       }));
 
-      const model = fastify.config.costs?.model ?? "claude-sonnet-4";
-      const claude = new ClaudeClient(model, { baseURL: fastify.config.ai?.base_url });
+      const claude = createLLMFromCtxConfig(fastify.config, "query");
 
       const response = await claude.promptWithFiles(
         `Answer this question using the wiki pages provided as context. Be concise and cite the page paths when referencing information.\n\nQuestion: ${question}`,

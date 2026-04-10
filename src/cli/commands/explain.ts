@@ -6,7 +6,7 @@ import { resolve, relative, basename, extname, dirname } from "node:path";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
-import { ClaudeClient } from "../../claude/client.js";
+import { createLLMFromCtxConfig } from "../../llm/index.js";
 import { CostTracker } from "../../costs/tracker.js";
 import { recordCall } from "../../usage/recorder.js";
 
@@ -221,7 +221,7 @@ ${fileContent}
 \`\`\``;
 
         // 4. Call Claude
-        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
+        const claude = createLLMFromCtxConfig(config, "explain");
         const response = await claude.promptWithFiles(userPrompt, wikiPages, {
           systemPrompt,
           maxTokens: options.maxTokens ? parseInt(options.maxTokens, 10) : 8192,

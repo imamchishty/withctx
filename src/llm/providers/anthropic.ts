@@ -100,6 +100,14 @@ export class AnthropicProvider implements LLMProvider {
     return !!process.env.ANTHROPIC_API_KEY;
   }
 
+  getModel(): string {
+    return this.client.getModel();
+  }
+
+  getBaseURL(): string {
+    return this.client.getBaseURL();
+  }
+
   private toResponse(response: {
     content: string;
     tokensUsed?: {

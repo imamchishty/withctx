@@ -41,6 +41,14 @@ export interface LLMProvider {
     options?: LLMOptions
   ): Promise<LLMResponse>;
   isAvailable(): Promise<boolean>;
+  /** Default model name this provider will use if none is passed per-call. */
+  getModel(): string;
+  /**
+   * Effective API endpoint the provider is hitting. Reflects the runtime
+   * resolution order (explicit config > env var > SDK/provider default).
+   * Surfaced by `ctx doctor` so users can confirm traffic routing.
+   */
+  getBaseURL(): string;
 }
 
 export interface LLMConfig {
