@@ -14,6 +14,7 @@ interface AddOptions {
   file?: string;
   type?: NoteType;
   tag?: string;
+  noTest?: boolean;
 }
 
 export function registerAddCommand(program: Command): void {
@@ -28,6 +29,10 @@ export function registerAddCommand(program: Command): void {
       "note"
     )
     .option("--tag <tag>", "Tag for categorization")
+    .option(
+      "--no-test",
+      "When adding a source, skip the connection probe (use for work laptops / offline setup)"
+    )
     .action(async (textParts: string[], options: AddOptions) => {
       // Check if first argument is a source type — delegate to interactive source add
       if (
@@ -36,7 +41,9 @@ export function registerAddCommand(program: Command): void {
       ) {
         const sourceType = textParts[0].toLowerCase();
         const pathArg = textParts[1]; // e.g. "ctx add local ./my-docs"
-        await runInteractiveSourceAdd(sourceType, pathArg);
+        await runInteractiveSourceAdd(sourceType, pathArg, {
+          skipTest: options.noTest === true,
+        });
         return;
       }
 

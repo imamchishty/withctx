@@ -253,18 +253,40 @@ interface AddResult {
   summary: string;
 }
 
-async function addConfluenceInteractive(prompt: ReturnType<typeof createPrompt>): Promise<AddResult | null> {
+async function addConfluenceInteractive(
+  prompt: ReturnType<typeof createPrompt>,
+  opts: { skipTest?: boolean } = {}
+): Promise<AddResult | null> {
   console.log();
   console.log(chalk.bold("  Adding Confluence source..."));
+  if (opts.skipTest) {
+    console.log(chalk.dim("  (--no-test: skipping connection probe)"));
+  }
   console.log();
 
   const baseUrl = (await prompt.ask("Confluence URL", "https://yourorg.atlassian.net")).replace(/\/$/, "");
   const email = await prompt.ask("Email (for Cloud auth, leave blank for Server/DC)");
-  const token = await prompt.askSecret("API Token");
+  const token = opts.skipTest
+    ? ""
+    : await prompt.askSecret("API Token (leave blank to configure later via CONFLUENCE_TOKEN env var)");
 
-  if (!token) {
-    console.log(chalk.red("  Token is required."));
-    return null;
+  // If we're in --no-test mode, or the user left the token blank, we go
+  // straight to writing a placeholder entry without making any network
+  // calls. This is the work-laptop / offline / scripting path.
+  if (opts.skipTest || !token) {
+    const name = await prompt.ask("Source name", "confluence");
+    const entry: Record<string, unknown> = {
+      name,
+      base_url: baseUrl,
+      token: "${CONFLUENCE_TOKEN}",
+    };
+    if (email) entry.email = "${CONFLUENCE_EMAIL}";
+    return {
+      type: "confluence",
+      sourceEntry: entry,
+      sourceName: name,
+      summary: `confluence source '${name}' (placeholder — set CONFLUENCE_TOKEN in env)`,
+    };
   }
 
   const spinner = ora("  Testing connection...").start();
@@ -272,8 +294,26 @@ async function addConfluenceInteractive(prompt: ReturnType<typeof createPrompt>)
 
   if (!test.ok) {
     spinner.fail(chalk.red(`  Connection failed: ${test.error}`));
-    const proceed = await prompt.confirm("Add anyway (with env var placeholders)?", false);
-    if (!proceed) return null;
+    console.log(
+      chalk.dim(
+        "  (This is common on work laptops — corporate proxy, SSL MITM,\n" +
+        "   Server/DC auth, or egress block. The source can still be\n" +
+        "   added now and used once the network/creds are sorted.)"
+      )
+    );
+    const proceed = await prompt.confirm(
+      "Add it anyway using env var placeholders?",
+      true  // <-- flipped to YES. Default is now "yes, add it".
+    );
+    if (!proceed) {
+      console.log(
+        chalk.yellow(
+          "  Not added. To force-add without a connection test, run:\n" +
+          `    ${chalk.bold("ctx add confluence --no-test")}`
+        )
+      );
+      return null;
+    }
 
     const name = await prompt.ask("Source name", "confluence");
     const entry: Record<string, unknown> = {
@@ -287,7 +327,7 @@ async function addConfluenceInteractive(prompt: ReturnType<typeof createPrompt>)
       type: "confluence",
       sourceEntry: entry,
       sourceName: name,
-      summary: `confluence source '${name}' (unverified)`,
+      summary: `confluence source '${name}' (unverified — connection test failed, using env placeholders)`,
     };
   }
 
@@ -344,18 +384,37 @@ async function addConfluenceInteractive(prompt: ReturnType<typeof createPrompt>)
   };
 }
 
-async function addJiraInteractive(prompt: ReturnType<typeof createPrompt>): Promise<AddResult | null> {
+async function addJiraInteractive(
+  prompt: ReturnType<typeof createPrompt>,
+  opts: { skipTest?: boolean } = {}
+): Promise<AddResult | null> {
   console.log();
   console.log(chalk.bold("  Adding Jira source..."));
+  if (opts.skipTest) {
+    console.log(chalk.dim("  (--no-test: skipping connection probe)"));
+  }
   console.log();
 
   const baseUrl = (await prompt.ask("Jira URL", "https://yourorg.atlassian.net")).replace(/\/$/, "");
   const email = await prompt.ask("Email (for Cloud auth, leave blank for Server/DC)");
-  const token = await prompt.askSecret("API Token");
+  const token = opts.skipTest
+    ? ""
+    : await prompt.askSecret("API Token (leave blank to configure later via JIRA_TOKEN env var)");
 
-  if (!token) {
-    console.log(chalk.red("  Token is required."));
-    return null;
+  if (opts.skipTest || !token) {
+    const name = await prompt.ask("Source name", "jira");
+    const entry: Record<string, unknown> = {
+      name,
+      base_url: baseUrl,
+      token: "${JIRA_TOKEN}",
+    };
+    if (email) entry.email = "${JIRA_EMAIL}";
+    return {
+      type: "jira",
+      sourceEntry: entry,
+      sourceName: name,
+      summary: `jira source '${name}' (placeholder — set JIRA_TOKEN in env)`,
+    };
   }
 
   const spinner = ora("  Testing connection...").start();
@@ -363,8 +422,25 @@ async function addJiraInteractive(prompt: ReturnType<typeof createPrompt>): Prom
 
   if (!test.ok) {
     spinner.fail(chalk.red(`  Connection failed: ${test.error}`));
-    const proceed = await prompt.confirm("Add anyway (with env var placeholders)?", false);
-    if (!proceed) return null;
+    console.log(
+      chalk.dim(
+        "  (Common on work laptops — proxy, SSL MITM, Server/DC auth, or\n" +
+        "   egress block. The source can still be added now.)"
+      )
+    );
+    const proceed = await prompt.confirm(
+      "Add it anyway using env var placeholders?",
+      true
+    );
+    if (!proceed) {
+      console.log(
+        chalk.yellow(
+          "  Not added. To force-add without a connection test, run:\n" +
+          `    ${chalk.bold("ctx add jira --no-test")}`
+        )
+      );
+      return null;
+    }
 
     const name = await prompt.ask("Source name", "jira");
     const entry: Record<string, unknown> = {
@@ -378,7 +454,7 @@ async function addJiraInteractive(prompt: ReturnType<typeof createPrompt>): Prom
       type: "jira",
       sourceEntry: entry,
       sourceName: name,
-      summary: `jira source '${name}' (unverified)`,
+      summary: `jira source '${name}' (unverified — connection test failed, using env placeholders)`,
     };
   }
 
@@ -426,24 +502,47 @@ async function addJiraInteractive(prompt: ReturnType<typeof createPrompt>): Prom
   };
 }
 
-async function addGitHubInteractive(prompt: ReturnType<typeof createPrompt>): Promise<AddResult | null> {
+async function addGitHubInteractive(
+  prompt: ReturnType<typeof createPrompt>,
+  opts: { skipTest?: boolean } = {}
+): Promise<AddResult | null> {
   console.log();
   console.log(chalk.bold("  Adding GitHub source..."));
+  if (opts.skipTest) {
+    console.log(chalk.dim("  (--no-test: skipping connection probe)"));
+  }
   console.log();
 
   const envToken = process.env.GITHUB_TOKEN;
-  let token: string;
-  if (envToken) {
-    console.log(chalk.dim("  Found GITHUB_TOKEN in environment."));
-    const useEnv = await prompt.confirm("Use existing GITHUB_TOKEN?", true);
-    token = useEnv ? envToken : await prompt.askSecret("GitHub Personal Access Token");
-  } else {
-    token = await prompt.askSecret("GitHub Personal Access Token");
+  let token = "";
+  if (!opts.skipTest) {
+    if (envToken) {
+      console.log(chalk.dim("  Found GITHUB_TOKEN in environment."));
+      const useEnv = await prompt.confirm("Use existing GITHUB_TOKEN?", true);
+      token = useEnv ? envToken : await prompt.askSecret("GitHub Personal Access Token (leave blank to set later)");
+    } else {
+      token = await prompt.askSecret("GitHub Personal Access Token (leave blank to set later)");
+    }
   }
 
-  if (!token) {
-    console.log(chalk.red("  Token is required."));
-    return null;
+  // Offline / no-token path — write a placeholder entry without any
+  // network calls and let the user fill GITHUB_TOKEN in env later.
+  if (opts.skipTest || !token) {
+    const owner = await prompt.ask("GitHub owner/org");
+    const repo = await prompt.ask("Repository (leave blank for all repos under owner)");
+    const name = await prompt.ask("Source name", "github");
+    const entry: Record<string, unknown> = {
+      name,
+      token: "${GITHUB_TOKEN}",
+      owner,
+    };
+    if (repo) entry.repo = repo;
+    return {
+      type: "github",
+      sourceEntry: entry,
+      sourceName: name,
+      summary: `github source '${name}' (placeholder — set GITHUB_TOKEN in env)`,
+    };
   }
 
   const spinner = ora("  Testing connection...").start();
@@ -451,8 +550,18 @@ async function addGitHubInteractive(prompt: ReturnType<typeof createPrompt>): Pr
 
   if (!test.ok) {
     spinner.fail(chalk.red(`  Connection failed: ${test.error}`));
-    const proceed = await prompt.confirm("Add anyway (with env var placeholders)?", false);
-    if (!proceed) return null;
+    const proceed = await prompt.confirm(
+      "Add it anyway using env var placeholders?",
+      true
+    );
+    if (!proceed) {
+      console.log(
+        chalk.yellow(
+          "  Not added. To force-add without a connection test, re-run with --no-test."
+        )
+      );
+      return null;
+    }
 
     const owner = await prompt.ask("GitHub owner/org");
     const repo = await prompt.ask("Repository (leave blank for all repos under owner)");
@@ -496,24 +605,42 @@ async function addGitHubInteractive(prompt: ReturnType<typeof createPrompt>): Pr
   };
 }
 
-async function addSlackInteractive(prompt: ReturnType<typeof createPrompt>): Promise<AddResult | null> {
+async function addSlackInteractive(
+  prompt: ReturnType<typeof createPrompt>,
+  opts: { skipTest?: boolean } = {}
+): Promise<AddResult | null> {
   console.log();
   console.log(chalk.bold("  Adding Slack source..."));
+  if (opts.skipTest) {
+    console.log(chalk.dim("  (--no-test: skipping connection probe)"));
+  }
   console.log();
 
   const envToken = process.env.SLACK_TOKEN;
-  let token: string;
-  if (envToken) {
-    console.log(chalk.dim("  Found SLACK_TOKEN in environment."));
-    const useEnv = await prompt.confirm("Use existing SLACK_TOKEN?", true);
-    token = useEnv ? envToken : await prompt.askSecret("Slack Bot Token (xoxb-...)");
-  } else {
-    token = await prompt.askSecret("Slack Bot Token (xoxb-...)");
+  let token = "";
+  if (!opts.skipTest) {
+    if (envToken) {
+      console.log(chalk.dim("  Found SLACK_TOKEN in environment."));
+      const useEnv = await prompt.confirm("Use existing SLACK_TOKEN?", true);
+      token = useEnv ? envToken : await prompt.askSecret("Slack Bot Token (xoxb-..., leave blank to set later)");
+    } else {
+      token = await prompt.askSecret("Slack Bot Token (xoxb-..., leave blank to set later)");
+    }
   }
 
-  if (!token) {
-    console.log(chalk.red("  Token is required."));
-    return null;
+  if (opts.skipTest || !token) {
+    const channels = await prompt.ask("Channel names (comma-separated)", "general");
+    const name = await prompt.ask("Source name", "slack");
+    return {
+      type: "slack",
+      sourceEntry: {
+        name,
+        token: "${SLACK_TOKEN}",
+        channels: channels.split(",").map((c) => c.trim().replace(/^#/, "")).filter(Boolean),
+      },
+      sourceName: name,
+      summary: `slack source '${name}' (placeholder — set SLACK_TOKEN in env)`,
+    };
   }
 
   const spinner = ora("  Testing connection...").start();
@@ -521,8 +648,18 @@ async function addSlackInteractive(prompt: ReturnType<typeof createPrompt>): Pro
 
   if (!test.ok) {
     spinner.fail(chalk.red(`  Connection failed: ${test.error}`));
-    const proceed = await prompt.confirm("Add anyway (with env var placeholders)?", false);
-    if (!proceed) return null;
+    const proceed = await prompt.confirm(
+      "Add it anyway using env var placeholders?",
+      true
+    );
+    if (!proceed) {
+      console.log(
+        chalk.yellow(
+          "  Not added. To force-add without a connection test, re-run with --no-test."
+        )
+      );
+      return null;
+    }
 
     const channels = await prompt.ask("Channel names (comma-separated)", "general");
     const name = await prompt.ask("Source name", "slack");
@@ -557,24 +694,45 @@ async function addSlackInteractive(prompt: ReturnType<typeof createPrompt>): Pro
   };
 }
 
-async function addNotionInteractive(prompt: ReturnType<typeof createPrompt>): Promise<AddResult | null> {
+async function addNotionInteractive(
+  prompt: ReturnType<typeof createPrompt>,
+  opts: { skipTest?: boolean } = {}
+): Promise<AddResult | null> {
   console.log();
   console.log(chalk.bold("  Adding Notion source..."));
+  if (opts.skipTest) {
+    console.log(chalk.dim("  (--no-test: skipping connection probe)"));
+  }
   console.log();
 
   const envToken = process.env.NOTION_TOKEN;
-  let token: string;
-  if (envToken) {
-    console.log(chalk.dim("  Found NOTION_TOKEN in environment."));
-    const useEnv = await prompt.confirm("Use existing NOTION_TOKEN?", true);
-    token = useEnv ? envToken : await prompt.askSecret("Notion Integration Token (secret_...)");
-  } else {
-    token = await prompt.askSecret("Notion Integration Token (secret_...)");
+  let token = "";
+  if (!opts.skipTest) {
+    if (envToken) {
+      console.log(chalk.dim("  Found NOTION_TOKEN in environment."));
+      const useEnv = await prompt.confirm("Use existing NOTION_TOKEN?", true);
+      token = useEnv ? envToken : await prompt.askSecret("Notion Integration Token (secret_..., leave blank to set later)");
+    } else {
+      token = await prompt.askSecret("Notion Integration Token (secret_..., leave blank to set later)");
+    }
   }
 
-  if (!token) {
-    console.log(chalk.red("  Token is required."));
-    return null;
+  if (opts.skipTest || !token) {
+    const dbIds = await prompt.ask("Database IDs (comma-separated, or leave blank)");
+    const name = await prompt.ask("Source name", "notion");
+    const entry: Record<string, unknown> = {
+      name,
+      token: "${NOTION_TOKEN}",
+    };
+    if (dbIds) {
+      entry.database_ids = dbIds.split(",").map((d) => d.trim()).filter(Boolean);
+    }
+    return {
+      type: "notion",
+      sourceEntry: entry,
+      sourceName: name,
+      summary: `notion source '${name}' (placeholder — set NOTION_TOKEN in env)`,
+    };
   }
 
   const spinner = ora("  Testing connection...").start();
@@ -582,8 +740,18 @@ async function addNotionInteractive(prompt: ReturnType<typeof createPrompt>): Pr
 
   if (!test.ok) {
     spinner.fail(chalk.red(`  Connection failed: ${test.error}`));
-    const proceed = await prompt.confirm("Add anyway (with env var placeholders)?", false);
-    if (!proceed) return null;
+    const proceed = await prompt.confirm(
+      "Add it anyway using env var placeholders?",
+      true
+    );
+    if (!proceed) {
+      console.log(
+        chalk.yellow(
+          "  Not added. To force-add without a connection test, re-run with --no-test."
+        )
+      );
+      return null;
+    }
 
     const dbIds = await prompt.ask("Database IDs (comma-separated, or leave blank)");
     const name = await prompt.ask("Source name", "notion");
@@ -664,24 +832,43 @@ async function addLocalInteractive(
 // Config helpers
 // ---------------------------------------------------------------------------
 
-function readRawConfig(configPath: string): Record<string, unknown> {
+export function readRawConfig(configPath: string): Record<string, unknown> {
   const raw = readFileSync(configPath, "utf-8");
   return (parseYaml(raw) as Record<string, unknown>) ?? {};
 }
 
-function writeRawConfig(configPath: string, data: Record<string, unknown>): void {
+export function writeRawConfig(
+  configPath: string,
+  data: Record<string, unknown>
+): void {
   writeFileSync(configPath, yamlStringify(data, { lineWidth: 120 }));
 }
 
-function appendSourceToConfig(
+/**
+ * Append a source entry to ctx.yaml. Exported for testing — the user
+ * flow goes through runInteractiveSourceAdd, but the pure yaml-mutation
+ * logic needs to be testable in isolation because that's where the
+ * "ctx add confluence silently does nothing" class of bugs lives.
+ *
+ * Resilient to three shapes of existing `sources:` block:
+ *   1. Missing entirely
+ *   2. Present but null (user wrote `sources:` with nothing under it)
+ *   3. Present with some other source types already configured
+ */
+export function appendSourceToConfig(
   configPath: string,
   type: SourceTypeKey,
   entry: Record<string, unknown>,
 ): void {
   const data = readRawConfig(configPath);
-  if (!data.sources) data.sources = {};
-  const sources = data.sources as Record<string, unknown[]>;
-  if (!sources[type]) sources[type] = [];
+  // `sources:` with no body parses to null, not {} — handle both.
+  if (!data.sources || typeof data.sources !== "object") {
+    data.sources = {};
+  }
+  const sources = data.sources as Record<string, unknown>;
+  if (!sources[type] || !Array.isArray(sources[type])) {
+    sources[type] = [];
+  }
   (sources[type] as Array<Record<string, unknown>>).push(entry);
   writeRawConfig(configPath, data);
 }
@@ -693,6 +880,7 @@ function appendSourceToConfig(
 export async function runInteractiveSourceAdd(
   typeArg?: string,
   pathArg?: string,
+  opts: { skipTest?: boolean } = {},
 ): Promise<void> {
   const configPath = findConfigFile();
   if (!configPath) {
@@ -733,19 +921,19 @@ export async function runInteractiveSourceAdd(
 
     switch (sourceType) {
       case "confluence":
-        result = await addConfluenceInteractive(prompt);
+        result = await addConfluenceInteractive(prompt, opts);
         break;
       case "jira":
-        result = await addJiraInteractive(prompt);
+        result = await addJiraInteractive(prompt, opts);
         break;
       case "github":
-        result = await addGitHubInteractive(prompt);
+        result = await addGitHubInteractive(prompt, opts);
         break;
       case "slack":
-        result = await addSlackInteractive(prompt);
+        result = await addSlackInteractive(prompt, opts);
         break;
       case "notion":
-        result = await addNotionInteractive(prompt);
+        result = await addNotionInteractive(prompt, opts);
         break;
       case "local":
         result = await addLocalInteractive(prompt, pathArg);
