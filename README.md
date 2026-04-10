@@ -1,12 +1,16 @@
 # withctx
 
 [![CI](https://github.com/imamchishty/withctx/actions/workflows/ci.yml/badge.svg)](https://github.com/imamchishty/withctx/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-114%20passing-brightgreen)](https://github.com/imamchishty/withctx/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-136%20passing-brightgreen)](https://github.com/imamchishty/withctx/actions/workflows/ci.yml)
 
 **AI compiles your project knowledge into a living wiki that engineers and agents read before writing code.**
 
 <p align="center">
   <img src="docs/images/architecture.svg" alt="withctx architecture — sources compiled into a wiki for humans and AI" width="100%" />
+</p>
+
+<p align="center">
+  <img src="docs/images/demo.gif" alt="withctx CLI demo — smart default, grouped help, doctor" width="90%" />
 </p>
 
 withctx connects to where your knowledge already lives — Jira, Confluence, Teams, GitHub, Slack, Notion, SharePoint, local docs — and has AI compile it into structured markdown pages. Engineers read it to onboard. Agents read it before writing code.
