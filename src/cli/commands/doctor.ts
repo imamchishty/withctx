@@ -1,12 +1,14 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import ora from "ora";
-import { existsSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readdirSync, statSync, accessSync, constants, readFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { findConfigFile, loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
+import { PageManager } from "../../wiki/pages.js";
 import { ClaudeClient } from "../../claude/client.js";
 import type { CtxConfig } from "../../types/config.js";
+import { icons, divider } from "../utils/ui.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -28,11 +30,11 @@ interface CheckResult {
 function icon(status: CheckStatus): string {
   switch (status) {
     case "pass":
-      return chalk.green("\u2705");
+      return icons.pass;
     case "warn":
-      return chalk.yellow("\u26A0\uFE0F");
+      return icons.warn;
     case "fail":
-      return chalk.red("\u274C");
+      return icons.fail;
   }
 }
 
@@ -317,6 +319,167 @@ function checkTeamsSources(config: CtxConfig): CheckResult[] {
   );
 }
 
+function checkNotionSources(config: CtxConfig): CheckResult[] {
+  const sources = config.sources?.notion ?? [];
+  return sources.map((source) =>
+    checkEnvVars(`Source: ${source.name} (notion)`, [
+      { name: "NOTION_TOKEN", required: true },
+    ])
+  );
+}
+
+function checkSlackSources(config: CtxConfig): CheckResult[] {
+  const sources = config.sources?.slack ?? [];
+  return sources.map((source) =>
+    checkEnvVars(`Source: ${source.name} (slack)`, [
+      { name: "SLACK_TOKEN", required: true },
+    ])
+  );
+}
+
+function checkWikiWritable(projectRoot: string): CheckResult {
+  const ctxDir = new CtxDirectory(projectRoot);
+  const targetPath = ctxDir.exists() ? ctxDir.path : projectRoot;
+
+  try {
+    accessSync(targetPath, constants.W_OK);
+    return {
+      label: "Wiki directory writable",
+      status: "pass",
+      message: targetPath,
+    };
+  } catch {
+    return {
+      label: "Wiki directory writable",
+      status: "fail",
+      message: `Cannot write to ${targetPath}`,
+      fix: "Check directory permissions (try: chmod -R u+w .ctx/).",
+    };
+  }
+}
+
+function checkWikiHasPages(projectRoot: string): CheckResult {
+  const ctxDir = new CtxDirectory(projectRoot);
+  if (!ctxDir.exists()) {
+    return {
+      label: "Wiki content",
+      status: "warn",
+      message: "Wiki not initialized",
+      fix: "Run 'ctx init' then 'ctx sync' to build the wiki.",
+    };
+  }
+
+  const pageManager = new PageManager(ctxDir);
+  const allPages = pageManager.list();
+  const contentPages = allPages.filter((p) => {
+    const base = p.split("/").pop() ?? p;
+    return base !== "index.md" && base !== "log.md" && base !== "glossary.md";
+  });
+
+  if (contentPages.length === 0) {
+    return {
+      label: "Wiki content",
+      status: "warn",
+      message: "Wiki is empty — no pages yet",
+      fix: "Run 'ctx sync' to fetch sources and compile the wiki.",
+    };
+  }
+
+  return {
+    label: "Wiki content",
+    status: "pass",
+    message: `${contentPages.length} page(s)`,
+  };
+}
+
+function checkLastSyncAge(projectRoot: string): CheckResult | null {
+  const ctxDir = new CtxDirectory(projectRoot);
+  if (!ctxDir.exists()) return null;
+
+  const pageManager = new PageManager(ctxDir);
+  const allPages = pageManager.list();
+  const contentPages = allPages.filter((p) => {
+    const base = p.split("/").pop() ?? p;
+    return base !== "index.md" && base !== "log.md" && base !== "glossary.md";
+  });
+
+  if (contentPages.length === 0) return null;
+
+  let newestMs = 0;
+  for (const pagePath of contentPages) {
+    try {
+      const stat = statSync(join(ctxDir.contextPath, pagePath));
+      if (stat.mtimeMs > newestMs) newestMs = stat.mtimeMs;
+    } catch {
+      // ignore
+    }
+  }
+
+  if (newestMs === 0) return null;
+
+  const ageDays = Math.floor((Date.now() - newestMs) / (1000 * 60 * 60 * 24));
+
+  if (ageDays > 7) {
+    return {
+      label: "Last sync age",
+      status: "warn",
+      message: `Wiki hasn't been synced in ${ageDays} day(s)`,
+      fix: "Run 'ctx sync' to refresh the wiki from sources.",
+    };
+  }
+
+  return {
+    label: "Last sync age",
+    status: "pass",
+    message: ageDays === 0 ? "Synced today" : `${ageDays} day(s) ago`,
+  };
+}
+
+function checkDependencies(projectRoot: string): CheckResult | null {
+  const pkgPath = join(projectRoot, "package.json");
+  if (!existsSync(pkgPath)) return null;
+
+  let pkg: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+  try {
+    pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
+  } catch {
+    return null;
+  }
+
+  const deps = { ...(pkg.dependencies ?? {}), ...(pkg.devDependencies ?? {}) };
+  const hasWithctx = Object.keys(deps).some(
+    (name) => name === "withctx" || name.startsWith("withctx-") || name.startsWith("@withctx/")
+  );
+
+  if (!hasWithctx) return null;
+
+  const nodeModulesPath = join(projectRoot, "node_modules");
+  if (!existsSync(nodeModulesPath)) {
+    return {
+      label: "Dependencies",
+      status: "warn",
+      message: "node_modules missing",
+      fix: "Run 'npm install' to install dependencies.",
+    };
+  }
+
+  const withctxInstalled = existsSync(join(nodeModulesPath, "withctx"));
+  if (!withctxInstalled && deps["withctx"]) {
+    return {
+      label: "Dependencies",
+      status: "warn",
+      message: "withctx listed in package.json but not installed",
+      fix: "Run 'npm install' to sync dependencies.",
+    };
+  }
+
+  return {
+    label: "Dependencies",
+    status: "pass",
+    message: "withctx dependencies installed",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Main command
 // ---------------------------------------------------------------------------
@@ -328,7 +491,7 @@ export function registerDoctorCommand(program: Command): void {
     .action(async () => {
       console.log();
       console.log(chalk.bold.cyan("ctx doctor"));
-      console.log(chalk.dim("\u2500".repeat(50)));
+      console.log(divider("\u2500", 50));
       console.log();
 
       const results: CheckResult[] = [];
@@ -376,6 +539,8 @@ export function registerDoctorCommand(program: Command): void {
           ...checkConfluenceSources(config),
           ...checkGitHubSources(config),
           ...checkTeamsSources(config),
+          ...checkNotionSources(config),
+          ...checkSlackSources(config),
         ];
 
         if (sourceResults.length > 0) {
@@ -388,11 +553,33 @@ export function registerDoctorCommand(program: Command): void {
 
           results.push(...sourceResults);
         }
+
+        // ----- Wiki checks -----
+        const wikiResults: CheckResult[] = [];
+        wikiResults.push(checkWikiWritable(projectRoot));
+        wikiResults.push(checkWikiHasPages(projectRoot));
+
+        const lastSync = checkLastSyncAge(projectRoot);
+        if (lastSync) wikiResults.push(lastSync);
+
+        const deps = checkDependencies(projectRoot);
+        if (deps) wikiResults.push(deps);
+
+        if (wikiResults.length > 0) {
+          console.log();
+          console.log(chalk.bold("Wiki"));
+
+          for (const r of wikiResults) {
+            console.log(`  ${icon(r.status)} ${r.label}: ${statusColor(r.status, r.message)}`);
+          }
+
+          results.push(...wikiResults);
+        }
       }
 
       // ----- Summary -----
       console.log();
-      console.log(chalk.dim("\u2500".repeat(50)));
+      console.log(divider("\u2500", 50));
 
       const failCount = results.filter((r) => r.status === "fail").length;
       const warnCount = results.filter((r) => r.status === "warn").length;
@@ -411,7 +598,7 @@ export function registerDoctorCommand(program: Command): void {
         console.log(chalk.bold("How to fix:"));
         for (const r of fixable) {
           console.log();
-          console.log(`  ${chalk.red("\u274C")} ${chalk.bold(r.label)}`);
+          console.log(`  ${icons.fail} ${chalk.bold(r.label)}`);
           console.log(`     ${chalk.dim(r.fix!)}`);
         }
       }
@@ -423,9 +610,25 @@ export function registerDoctorCommand(program: Command): void {
         console.log(chalk.bold("Warnings:"));
         for (const r of warnings) {
           console.log();
-          console.log(`  ${chalk.yellow("\u26A0\uFE0F")} ${chalk.bold(r.label)}`);
+          console.log(`  ${icons.warn} ${chalk.bold(r.label)}`);
           console.log(`     ${chalk.dim(r.fix!)}`);
         }
+      }
+
+      // Final summary line
+      console.log();
+      if (failCount > 0) {
+        console.log(
+          `  ${icons.fail} ${chalk.bold.red(`${failCount} check${failCount === 1 ? "" : "s"} failed`)} ${chalk.dim("— see fixes above")}`
+        );
+      } else if (warnCount > 0) {
+        console.log(
+          `  ${icons.warn} ${chalk.bold.yellow(`${warnCount} warning${warnCount === 1 ? "" : "s"}`)} ${chalk.dim("— see fixes above")}`
+        );
+      } else {
+        console.log(
+          `  ${icons.pass} ${chalk.bold.green("Everything looks good!")} ${chalk.dim("Next:")} ${chalk.cyan("ctx sync")}`
+        );
       }
 
       console.log();

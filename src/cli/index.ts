@@ -1,10 +1,16 @@
 #!/usr/bin/env node
 
 import { Command } from "commander";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import chalk from "chalk";
+
+import { findConfigFile } from "../config/loader.js";
+import { CtxDirectory } from "../storage/ctx-dir.js";
+import { PageManager } from "../wiki/pages.js";
+import { scoreWikiFreshness } from "../quality/freshness.js";
+import type { WikiPage } from "../types/page.js";
 
 import { registerInitCommand } from "./commands/init.js";
 import { registerIngestCommand } from "./commands/ingest.js";
@@ -178,10 +184,186 @@ program.addHelpText("beforeAll", () => {
   return "";
 });
 
-// Also show grouped help when invoked with no arguments
+// Smart default — detect user's state and show most relevant next action
 program.action(() => {
-  printGroupedHelp();
+  printSmartDefault();
 });
+
+// Explicit `ctx help` subcommand — always shows the full grouped help
+program
+  .command("help")
+  .description("Show all commands grouped by purpose")
+  .action(() => {
+    printGroupedHelp();
+  });
+
+// ---------------------------------------------------------------------------
+// Smart default — state detection for `ctx` with no arguments
+// ---------------------------------------------------------------------------
+
+type CtxState = "fresh" | "initialised" | "wiki";
+
+interface WikiStats {
+  pageCount: number;
+  lastSyncMs: number | null;
+  fresh: number;
+  aging: number;
+  stale: number;
+}
+
+function detectState(): { state: CtxState; configPath: string | null; projectRoot: string | null; stats: WikiStats | null } {
+  const configPath = findConfigFile();
+
+  if (!configPath) {
+    return { state: "fresh", configPath: null, projectRoot: null, stats: null };
+  }
+
+  const projectRoot = resolve(configPath, "..");
+  const ctxDir = new CtxDirectory(projectRoot);
+
+  if (!ctxDir.exists()) {
+    return { state: "initialised", configPath, projectRoot, stats: null };
+  }
+
+  const stats = collectWikiStats(ctxDir);
+  if (stats.pageCount === 0) {
+    return { state: "initialised", configPath, projectRoot, stats: null };
+  }
+
+  return { state: "wiki", configPath, projectRoot, stats };
+}
+
+function collectWikiStats(ctxDir: CtxDirectory): WikiStats {
+  const pageManager = new PageManager(ctxDir);
+
+  // Count pages — exclude index.md, log.md, and glossary.md
+  const allPagePaths = pageManager.list();
+  const contentPagePaths = allPagePaths.filter((p) => {
+    const base = p.split("/").pop() ?? p;
+    return base !== "index.md" && base !== "log.md" && base !== "glossary.md";
+  });
+
+  let lastSyncMs: number | null = null;
+  const pages: WikiPage[] = [];
+
+  for (const pagePath of contentPagePaths) {
+    const full = join(ctxDir.contextPath, pagePath);
+    try {
+      const stat = statSync(full);
+      const mtime = stat.mtimeMs;
+      if (lastSyncMs === null || mtime > lastSyncMs) {
+        lastSyncMs = mtime;
+      }
+      const page = pageManager.read(pagePath);
+      if (page) pages.push(page);
+    } catch {
+      // ignore stat errors
+    }
+  }
+
+  const freshnessScores = scoreWikiFreshness(pages);
+  let fresh = 0;
+  let aging = 0;
+  let stale = 0;
+  for (const s of freshnessScores) {
+    if (s.score === "fresh") fresh++;
+    else if (s.score === "aging") aging++;
+    else if (s.score === "stale") stale++;
+  }
+
+  return {
+    pageCount: contentPagePaths.length,
+    lastSyncMs,
+    fresh,
+    aging,
+    stale,
+  };
+}
+
+function formatRelativeTime(ms: number): string {
+  const diffMs = Date.now() - ms;
+  if (diffMs < 0) return "just now";
+
+  const minute = 60 * 1000;
+  const hour = 60 * minute;
+  const day = 24 * hour;
+  const week = 7 * day;
+
+  if (diffMs < minute) return "just now";
+  if (diffMs < hour) {
+    const mins = Math.floor(diffMs / minute);
+    return `${mins} minute${mins === 1 ? "" : "s"} ago`;
+  }
+  if (diffMs < day) {
+    const hours = Math.floor(diffMs / hour);
+    return `${hours} hour${hours === 1 ? "" : "s"} ago`;
+  }
+  if (diffMs < week) {
+    const days = Math.floor(diffMs / day);
+    return `${days} day${days === 1 ? "" : "s"} ago`;
+  }
+  const weeks = Math.floor(diffMs / week);
+  return `${weeks} week${weeks === 1 ? "" : "s"} ago`;
+}
+
+function printSmartDefault(): void {
+  const { state, stats } = detectState();
+
+  console.log();
+
+  if (state === "fresh") {
+    console.log(chalk.bold(`Welcome to withctx!`));
+    console.log();
+    console.log(chalk.dim("  withctx compiles your project knowledge (code, Jira, Confluence, Slack, ...)"));
+    console.log(chalk.dim("  into a maintained wiki for your team and AI agents."));
+    console.log();
+    console.log("  Get started:");
+    console.log();
+    console.log(`    ${chalk.cyan("ctx go")}              ${chalk.dim("One command: init + ingest your project")}`);
+    console.log(`    ${chalk.cyan("ctx setup")}           ${chalk.dim("Interactive setup wizard")}`);
+    console.log(`    ${chalk.cyan("ctx init")}            ${chalk.dim("Manual init (creates ctx.yaml)")}`);
+    console.log();
+    console.log(`  ${chalk.dim("Learn more:")}  ${chalk.cyan("ctx help")}`);
+    console.log(`  ${chalk.dim("Docs:")}        ${chalk.dim("https://github.com/imamchishty/withctx")}`);
+    console.log();
+    return;
+  }
+
+  if (state === "initialised") {
+    console.log(chalk.bold("withctx is set up but your wiki is empty."));
+    console.log();
+    console.log("  Next step:");
+    console.log();
+    console.log(`    ${chalk.cyan("ctx sync")}           ${chalk.dim("Fetch sources and compile the wiki")}`);
+    console.log(`    ${chalk.cyan("ctx doctor")}         ${chalk.dim("Check your configuration")}`);
+    console.log();
+    console.log(chalk.dim("  Tip: Run 'ctx status' after sync to see your wiki health."));
+    console.log();
+    return;
+  }
+
+  // state === "wiki"
+  const s = stats!;
+  console.log(chalk.bold("withctx") + chalk.dim(" — your project wiki"));
+  console.log();
+
+  const lastSync = s.lastSyncMs !== null ? formatRelativeTime(s.lastSyncMs) : "never";
+
+  console.log(`  ${chalk.dim("Pages:")}        ${chalk.bold(String(s.pageCount))}`);
+  console.log(`  ${chalk.dim("Last sync:")}    ${lastSync}`);
+  console.log(
+    `  ${chalk.dim("Freshness:")}    ${chalk.green(`${s.fresh} fresh`)}, ${chalk.yellow(`${s.aging} aging`)}, ${chalk.red(`${s.stale} stale`)}`
+  );
+  console.log();
+  console.log("  What now?");
+  console.log();
+  console.log(`    ${chalk.cyan('ctx query "..."')}    ${chalk.dim("Ask a question")}`);
+  console.log(`    ${chalk.cyan("ctx status")}         ${chalk.dim("Full dashboard")}`);
+  console.log(`    ${chalk.cyan("ctx sync")}           ${chalk.dim("Refresh from sources")}`);
+  console.log(`    ${chalk.cyan("ctx onboard")}        ${chalk.dim("Personalised onboarding guide")}`);
+  console.log(`    ${chalk.cyan("ctx help")}           ${chalk.dim("All commands")}`);
+  console.log();
+}
 
 // Register all subcommands
 registerInitCommand(program);

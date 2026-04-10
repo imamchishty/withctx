@@ -6,8 +6,14 @@ import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
 import { processMarkdown, type DocType } from "../../connectors/markdown-processor.js";
+import { visualWidth } from "../utils/ui.js";
 
 // ── Box-drawing helpers ───────────────────────────────────────────────
+// Thin wrappers that delegate width measurement to the shared ui.ts
+// library. We keep a local box layout because this command uses inline
+// divider rows (teeLeft/teeRight) which the generic ui.box helper does
+// not support; the goal here is to share the primitives, not rewrite
+// the multi-section dashboard.
 
 const BOX = {
   topLeft: "\u250C",
@@ -33,14 +39,9 @@ function boxDivider(width: number): string {
 }
 
 function boxLine(content: string, width: number): string {
-  const stripped = stripAnsi(content);
-  const padding = Math.max(0, width - stripped.length);
+  const visible = visualWidth(content);
+  const padding = Math.max(0, width - visible);
   return BOX.vertical + " " + content + " ".repeat(padding) + " " + BOX.vertical;
-}
-
-function stripAnsi(str: string): string {
-  // eslint-disable-next-line no-control-regex
-  return str.replace(/\u001B\[[0-9;]*m/g, "");
 }
 
 // ── Progress bar helper ───────────────────────────────────────────────

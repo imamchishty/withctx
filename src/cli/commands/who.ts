@@ -6,6 +6,7 @@ import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
 import { processMarkdown, parseFrontmatter } from "../../connectors/markdown-processor.js";
+import { printTable } from "../utils/ui.js";
 
 interface OwnershipEntry {
   area: string;
@@ -161,9 +162,6 @@ export function registerWhoCommand(program: Command): void {
         }
 
         // Table output
-        const areaWidth = Math.max(24, ...filtered.map((e) => e.area.length + 2));
-        const ownerWidth = Math.max(22, ...filtered.map((e) => (e.owners.join(", ") || "\u2014").length + 2));
-
         console.log();
         console.log(chalk.bold.cyan("withctx ownership"));
         if (search) {
@@ -171,26 +169,21 @@ export function registerWhoCommand(program: Command): void {
         }
         console.log();
 
-        // Header
-        const header =
-          chalk.bold("Area".padEnd(areaWidth)) +
-          chalk.bold("Owner(s)".padEnd(ownerWidth)) +
-          chalk.bold("Last Updated");
-        console.log(`  ${header}`);
-        console.log(`  ${chalk.dim("\u2500".repeat(areaWidth + ownerWidth + 20))}`);
+        const rows = filtered.map((entry) => {
+          const area = chalk.white(entry.area);
+          const ownerStr =
+            entry.owners.length > 0
+              ? chalk.green(entry.owners.join(", "))
+              : chalk.dim("\u2014");
+          const time = chalk.dim(formatRelativeTime(entry.lastUpdated));
+          const staleFlag = entry.stale ? chalk.yellow(" \u26A0 stale") : "";
+          return [area, ownerStr, `${time}${staleFlag}`];
+        });
 
-        // Rows
-        for (const entry of filtered) {
-          const area = entry.area.padEnd(areaWidth);
-          const ownerStr = entry.owners.length > 0 ? entry.owners.join(", ") : "\u2014";
-          const owner = ownerStr.padEnd(ownerWidth);
-          const time = formatRelativeTime(entry.lastUpdated);
-          const staleFlag = entry.stale ? chalk.yellow(" \u26A0\uFE0F stale") : "";
-
-          console.log(
-            `  ${chalk.white(area)}${entry.owners.length > 0 ? chalk.green(owner) : chalk.dim(owner)}${chalk.dim(time)}${staleFlag}`
-          );
-        }
+        printTable({
+          headers: ["Area", "Owner(s)", "Last Updated"],
+          rows,
+        });
 
         // Summary
         console.log();
