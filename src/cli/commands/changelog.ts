@@ -9,6 +9,7 @@ import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
 import { ClaudeClient } from "../../claude/client.js";
 import { CostTracker } from "../../costs/tracker.js";
+import { recordCall } from "../../usage/recorder.js";
 
 type OutputFormat = "terminal" | "markdown" | "json";
 
@@ -331,6 +332,7 @@ export function registerChangelogCommand(program: Command): void {
 
         // Track costs
         if (response.tokensUsed) {
+          const changelogModel = response.model ?? "claude-sonnet-4";
           const budget = config.costs?.budget;
           const costTracker = new CostTracker(ctxDir, { budget });
           costTracker.record(
@@ -339,8 +341,14 @@ export function registerChangelogCommand(program: Command): void {
               inputTokens: response.tokensUsed.input,
               outputTokens: response.tokensUsed.output,
             },
-            response.model ?? "claude-sonnet-4"
+            changelogModel
           );
+          recordCall(ctxDir, "changelog", changelogModel, {
+            input: response.tokensUsed.input,
+            output: response.tokensUsed.output,
+            cacheRead: response.tokensUsed.cacheRead ?? 0,
+            cacheWrite: response.tokensUsed.cacheCreation ?? 0,
+          });
         }
 
         // Output

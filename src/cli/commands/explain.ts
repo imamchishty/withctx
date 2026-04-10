@@ -8,6 +8,7 @@ import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
 import { ClaudeClient } from "../../claude/client.js";
 import { CostTracker } from "../../costs/tracker.js";
+import { recordCall } from "../../usage/recorder.js";
 
 type Depth = "brief" | "normal" | "deep";
 type Audience = "new-engineer" | "senior" | "agent";
@@ -242,6 +243,7 @@ ${fileContent}
 
         // 6. Token/cost tracking
         if (response.tokensUsed) {
+          const explainModel = response.model ?? config.costs?.model ?? "claude-sonnet-4";
           const costTracker = new CostTracker(ctxDir, {
             budget: config.costs?.budget,
           });
@@ -251,8 +253,14 @@ ${fileContent}
               inputTokens: response.tokensUsed.input,
               outputTokens: response.tokensUsed.output,
             },
-            response.model ?? config.costs?.model ?? "claude-sonnet-4"
+            explainModel
           );
+          recordCall(ctxDir, "explain", explainModel, {
+            input: response.tokensUsed.input,
+            output: response.tokensUsed.output,
+            cacheRead: response.tokensUsed.cacheRead ?? 0,
+            cacheWrite: response.tokensUsed.cacheCreation ?? 0,
+          });
 
           console.log(
             chalk.dim(

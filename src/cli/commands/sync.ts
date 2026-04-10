@@ -13,6 +13,7 @@ import { HashIndex, type SyncIndex, type SyncIndexEntry } from "../../sync/hash-
 import { formatCost, formatDuration } from "../utils/progress.js";
 import * as ui from "../utils/ui.js";
 import type { RawDocument } from "../../types/source.js";
+import { recordCall, recordSnapshot } from "../../usage/recorder.js";
 
 interface SyncOptions {
   source?: string;
@@ -413,9 +414,33 @@ ${unaffectedPages.join(", ") || "(none)"}
           actualCost =
             (response.tokensUsed.input / 1_000_000) * pricing.input +
             (response.tokensUsed.output / 1_000_000) * pricing.output;
+          // Persist the call to .ctx/usage.jsonl history.
+          recordCall(ctxDir, "sync", model, {
+            input: response.tokensUsed.input,
+            output: response.tokensUsed.output,
+            cacheRead: response.tokensUsed.cacheRead ?? 0,
+            cacheWrite: response.tokensUsed.cacheCreation ?? 0,
+          });
         } else {
           const tokens = estimateTokens(docsToCompile.map((d) => d.content).join(""));
           actualCost = estimateCost(tokens, model).total;
+        }
+
+        // Snapshot wiki state for growth charts (best-effort).
+        try {
+          const wikiPages = ctxDir.listPages();
+          let bytes = 0;
+          for (const p of wikiPages) {
+            const content = ctxDir.readPage(p);
+            if (content) bytes += Buffer.byteLength(content);
+          }
+          recordSnapshot(ctxDir, {
+            sourceDocs: allDocs.length,
+            wikiPages: wikiPages.length,
+            bytes,
+          });
+        } catch {
+          // best-effort
         }
 
         const fullRebuildTokens = estimateTokens(allDocs.map((d) => d.content).join(""));

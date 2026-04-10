@@ -6,6 +6,7 @@ import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
 import { ClaudeClient, totalTokens } from "../../claude/client.js";
+import { recordCall } from "../../usage/recorder.js";
 
 type OutputFormat = "terminal" | "markdown" | "json";
 
@@ -295,6 +296,13 @@ export function registerImpactCommand(program: Command): void {
           const cacheWriteCost = ((response.tokensUsed.cacheCreation ?? 0) / 1_000_000) * 3.75;
           const totalCost = inputCost + outputCost + cacheReadCost + cacheWriteCost;
           console.log(chalk.dim(`Estimated cost: $${totalCost.toFixed(4)}`));
+
+          recordCall(ctxDir, "impact", response.model ?? config.costs?.model ?? "claude-sonnet-4", {
+            input: response.tokensUsed.input,
+            output: response.tokensUsed.output,
+            cacheRead: response.tokensUsed.cacheRead ?? 0,
+            cacheWrite: response.tokensUsed.cacheCreation ?? 0,
+          });
         }
       } catch (error) {
         spinner.fail(chalk.red("Impact analysis failed"));

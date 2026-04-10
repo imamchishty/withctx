@@ -12,6 +12,7 @@ import { safeGenerate } from "../../connectors/safe-generator.js";
 import { progressBar, formatCost, formatTokens, formatDuration } from "../utils/progress.js";
 import type { RawDocument } from "../../types/source.js";
 import type { SourceConnector } from "../../connectors/types.js";
+import { recordCall, recordSnapshot } from "../../usage/recorder.js";
 
 interface IngestOptions {
   maxTokens?: string;
@@ -590,10 +591,34 @@ export function registerIngestCommand(program: Command): void {
           logContent + "\n" + logEntry
         );
 
-        // Track costs
+        // Track usage history (.ctx/usage.jsonl)
         if (response.tokensUsed) {
+          recordCall(ctxDir, "ingest", model, {
+            input: response.tokensUsed.input,
+            output: response.tokensUsed.output,
+            cacheRead: response.tokensUsed.cacheRead ?? 0,
+            cacheWrite: response.tokensUsed.cacheCreation ?? 0,
+          });
+          // Keep the legacy costs.json totals up-to-date for backwards compat.
           const total = response.tokensUsed.input + response.tokensUsed.output;
           trackCostEntry(ctxDir, "ingest", total);
+        }
+
+        // Record a wiki snapshot so growth charts have data points.
+        try {
+          const wikiPages = ctxDir.listPages();
+          let bytes = 0;
+          for (const p of wikiPages) {
+            const content = ctxDir.readPage(p);
+            if (content) bytes += Buffer.byteLength(content);
+          }
+          recordSnapshot(ctxDir, {
+            sourceDocs: uniqueDocs.length,
+            wikiPages: wikiPages.length,
+            bytes,
+          });
+        } catch {
+          // Snapshot is best-effort — never fail an ingest because of it.
         }
       } catch (error) {
         // Ensure spinner is stopped on error

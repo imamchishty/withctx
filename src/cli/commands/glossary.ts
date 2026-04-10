@@ -8,6 +8,7 @@ import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
 import { ClaudeClient } from "../../claude/client.js";
 import { CostTracker } from "../../costs/tracker.js";
+import { recordCall } from "../../usage/recorder.js";
 
 const GLOSSARY_PAGE = "glossary.md";
 const MAX_CONTEXT_CHARS = 50_000;
@@ -318,14 +319,21 @@ export function registerGlossaryCommand(program: Command): void {
 
         // Track costs
         if (response.tokensUsed) {
+          const glossaryModel = response.model ?? config.costs?.model ?? "claude-sonnet-4";
           costTracker.record(
             "glossary",
             {
               inputTokens: response.tokensUsed.input,
               outputTokens: response.tokensUsed.output,
             },
-            response.model ?? config.costs?.model ?? "claude-sonnet-4"
+            glossaryModel
           );
+          recordCall(ctxDir, "glossary", glossaryModel, {
+            input: response.tokensUsed.input,
+            output: response.tokensUsed.output,
+            cacheRead: response.tokensUsed.cacheRead ?? 0,
+            cacheWrite: response.tokensUsed.cacheCreation ?? 0,
+          });
         }
 
         // Save to wiki if --update

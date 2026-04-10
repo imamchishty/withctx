@@ -8,6 +8,7 @@ import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
 import { ClaudeClient } from "../../claude/client.js";
+import { recordCall } from "../../usage/recorder.js";
 import { VectorManager } from "../../vector/index.js";
 import type { SearchResult, VectorStoreConfig } from "../../types/vector.js";
 import { heading, dim, success, divider } from "../utils/ui.js";
@@ -287,7 +288,8 @@ export function registerQueryCommand(program: Command): void {
         }
 
         // --- 4. Call Claude ----------------------------------------------
-        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4-20250514");
+        const queryModel = config.costs?.model ?? "claude-sonnet-4-20250514";
+        const claude = new ClaudeClient(queryModel);
         const askSpinner = raw ? null : ora("Asking Claude...").start();
 
         const systemPrompt =
@@ -383,6 +385,16 @@ ${question}
             : estCost;
           stats.push(`~$${actualCost.toFixed(4)}`);
           dim(stats.join("  \u00B7  "));
+        }
+
+        // Persist call to .ctx/usage.jsonl history.
+        if (response.tokensUsed) {
+          recordCall(ctxDir, "query", queryModel, {
+            input: response.tokensUsed.input,
+            output: response.tokensUsed.output,
+            cacheRead: response.tokensUsed.cacheRead ?? 0,
+            cacheWrite: response.tokensUsed.cacheCreation ?? 0,
+          });
         }
 
         // --- 6. Persist history ------------------------------------------

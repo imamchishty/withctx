@@ -8,6 +8,7 @@ import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
 import { ClaudeClient } from "../../claude/client.js";
 import { CostTracker } from "../../costs/tracker.js";
+import { recordCall } from "../../usage/recorder.js";
 
 const FAQ_PAGE = "faq.md";
 
@@ -278,14 +279,21 @@ export function registerFaqCommand(program: Command): void {
 
         // Track costs
         if (response.tokensUsed) {
+          const faqModel = response.model ?? config.costs?.model ?? "claude-sonnet-4";
           costTracker.record(
             "faq",
             {
               inputTokens: response.tokensUsed.input,
               outputTokens: response.tokensUsed.output,
             },
-            response.model ?? config.costs?.model ?? "claude-sonnet-4"
+            faqModel
           );
+          recordCall(ctxDir, "faq", faqModel, {
+            input: response.tokensUsed.input,
+            output: response.tokensUsed.output,
+            cacheRead: response.tokensUsed.cacheRead ?? 0,
+            cacheWrite: response.tokensUsed.cacheCreation ?? 0,
+          });
         }
 
         // Write to additional output file if requested
