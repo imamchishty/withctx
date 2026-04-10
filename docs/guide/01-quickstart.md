@@ -43,7 +43,37 @@ ctx setup --name my-project           # override detected project name
 ctx setup --with jira,confluence      # also scaffold external connectors
 ctx setup --org acme --token ghp_...  # discover all repos in a GitHub org
 ctx setup --no-ingest                 # write ctx.yaml only, skip wiki compilation
+ctx setup --scan                      # force scan of sibling folders for git repos
+ctx setup -y                          # skip all prompts (CI-friendly)
 ```
+
+### Multi-repo in one folder — the common case
+
+If you've got several repos side-by-side:
+
+```
+~/work/acme/
+├── api/        ← git repo
+├── auth/       ← git repo
+├── web/        ← git repo
+└── worker/     ← git repo
+```
+
+Just `cd ~/work/acme && ctx setup`. Because the parent folder has no `.git`, withctx auto-scans its children, detects all four repos, reads each `.git/config` for the origin URL and current branch, and asks:
+
+```
+Detected 4 git repos in this folder:
+    api       github.com/acme/api     [main]
+    auth      github.com/acme/auth    [main]
+    web       github.com/acme/web     [develop]
+    worker    github.com/acme/worker  [main]
+
+Add them all to ctx.yaml? (Y/n)
+```
+
+Accepting writes them into both `repos:` (metadata) and `sources.local[]` (so ingest reads them). No `--flag` needed — it Just Works because the layout is unambiguous.
+
+Force scanning even when the current folder itself is a git repo (for aggregator-style context repos) with `--scan`. Skip it unconditionally with `--no-scan`.
 
 ## Ask it anything
 

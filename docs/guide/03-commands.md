@@ -6,10 +6,13 @@ Every command, one line each. Run `ctx help` for the same view in your terminal.
 
 | Command | Does |
 |---|---|
-| `ctx setup` | Detect sources, write `ctx.yaml`, compile the wiki. **The only setup command.** |
+| `ctx setup` | Detect sources (and sibling git repos if the current dir isn't itself a repo), write `ctx.yaml`, compile the wiki. **The only setup command.** |
 | `ctx setup --no-ingest` | Write `ctx.yaml` only — useful when you want to edit it before the first compile. |
 | `ctx setup --with jira,confluence` | Also scaffold external connectors. |
-| `ctx setup --org acme --token ghp_...` | Discover every repo in a GitHub org. |
+| `ctx setup --org acme --token ghp_...` | Discover every repo in a GitHub org via the GitHub API. |
+| `ctx setup --scan` | Force sibling-repo scan even if the current folder is a git repo. |
+| `ctx setup --no-scan` | Never scan siblings (useful in CI). |
+| `ctx setup -y` | Skip all prompts (assume yes to everything). |
 | `ctx add <source>` | Interactively add a source (jira, github, slack, …). |
 
 > `ctx init` and `ctx go` are aliases for `ctx setup` — all three names run the same code. Use whichever your muscle memory prefers.

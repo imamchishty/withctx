@@ -50,7 +50,7 @@ describe("setup command aliases (init/go merge regression)", () => {
     expect(setupish).toHaveLength(1);
   });
 
-  it("exposes the --name, --with, --org, --no-ingest options", () => {
+  it("exposes all expected options", () => {
     const program = new Command();
     registerGoCommand(program);
 
@@ -58,12 +58,16 @@ describe("setup command aliases (init/go merge regression)", () => {
     const flags = setup.options.map((o) => o.long);
 
     // These options are the union of what old init.ts and old go.ts
-    // each supported individually. The merge must preserve both sets.
+    // each supported individually, plus the sibling-repo scan flags
+    // added in the scan-repos follow-up. The merge must preserve all.
     expect(flags).toContain("--name");
     expect(flags).toContain("--with");
     expect(flags).toContain("--org");
     expect(flags).toContain("--token");
     expect(flags).toContain("--no-ingest");
+    expect(flags).toContain("--scan");
+    expect(flags).toContain("--no-scan");
+    expect(flags).toContain("--yes");
   });
 
   it("has a description that mentions what the command does", () => {

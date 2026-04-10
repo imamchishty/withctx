@@ -9,6 +9,8 @@ import { findConfigFile, loadConfig, getProjectRoot } from "../../config/loader.
 import { PageManager } from "../../wiki/pages.js";
 import { createLLMFromCtxConfig } from "../../llm/index.js";
 import { LocalFilesConnector } from "../../connectors/local-files.js";
+import { scanForRepos, type DetectedRepo } from "../../setup/scan-repos.js";
+import { createInterface } from "node:readline";
 import type { RawDocument } from "../../types/source.js";
 import type { CtxConfig } from "../../types/config.js";
 
@@ -161,10 +163,35 @@ interface RunInitArgs {
   token: string | undefined;
   spinner: ReturnType<typeof ora>;
   projectNameOverride?: string;
+  siblingRepos?: DetectedRepo[];
+}
+
+/**
+ * Minimal Y/n prompt. Returns the default if stdin is not a TTY (so
+ * the command stays usable from scripts and CI), honours --yes via
+ * the caller. Intentionally not using inquirer — we only need one
+ * question here and pulling in a dep for it is over-kill.
+ */
+function confirmPrompt(question: string, defaultYes: boolean): Promise<boolean> {
+  if (!process.stdin.isTTY) {
+    return Promise.resolve(defaultYes);
+  }
+  return new Promise((resolvePromise) => {
+    const rl = createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(question, (answer) => {
+      rl.close();
+      const trimmed = answer.trim().toLowerCase();
+      if (trimmed === "") {
+        resolvePromise(defaultYes);
+      } else {
+        resolvePromise(trimmed === "y" || trimmed === "yes");
+      }
+    });
+  });
 }
 
 async function runInit(args: RunInitArgs): Promise<InitResult> {
-  const { rootDir, connectors, org, token, spinner, projectNameOverride } = args;
+  const { rootDir, connectors, org, token, spinner, projectNameOverride, siblingRepos } = args;
   const existingConfig = findConfigFile(rootDir);
   const wasAlreadyInitialized = existingConfig !== null;
 
@@ -187,6 +214,25 @@ async function runInit(args: RunInitArgs): Promise<InitResult> {
   const projectName = projectNameOverride ?? detectProjectName(rootDir);
   const localSources = scanLocalSources(rootDir);
 
+  // Fold in sibling repos as additional local sources. Each detected
+  // repo becomes one local source pointing at its folder, so the
+  // ingest pipeline will walk and compile the code inside it.
+  // We also record them in `repos:` so future commands know the
+  // github URL + branch for each one.
+  if (siblingRepos && siblingRepos.length > 0) {
+    for (const repo of siblingRepos) {
+      // Avoid duplicates if a sibling repo name collides with an
+      // already-detected local source (e.g. "docs").
+      if (!localSources.some((s) => s.name === repo.name)) {
+        localSources.push({
+          name: repo.name,
+          path: repo.path,
+          fileCount: 0, // unknown until ingest — harmless for config
+        });
+      }
+    }
+  }
+
   spinner.text = `Found ${localSources.length} local source(s)...`;
 
   const config: CtxConfig = {
@@ -203,6 +249,25 @@ async function runInit(args: RunInitArgs): Promise<InitResult> {
       model: "claude-sonnet-4",
     },
   };
+
+  // Sibling repos with a known github URL go into `repos:` so
+  // multi-repo tooling knows the remote + branch for each one. Repos
+  // without an origin remote stay as local-only sources (already
+  // added above) — we'd rather write no entry than an invalid one.
+  if (siblingRepos && siblingRepos.length > 0) {
+    const withRemotes = siblingRepos.filter((r) => r.github !== null);
+    if (withRemotes.length > 0) {
+      if (!config.repos) config.repos = [];
+      for (const repo of withRemotes) {
+        const entry: { name: string; github: string; branch?: string } = {
+          name: repo.name,
+          github: repo.github!,
+        };
+        if (repo.branch) entry.branch = repo.branch;
+        (config.repos as Array<typeof entry>).push(entry);
+      }
+    }
+  }
 
   // Add connectors
   for (const connector of connectors) {
@@ -443,6 +508,8 @@ interface GoOptions {
   with?: string[];
   name?: string;
   ingest?: boolean;
+  scan?: boolean;
+  yes?: boolean;
 }
 
 export function registerGoCommand(program: Command): void {
@@ -460,12 +527,65 @@ export function registerGoCommand(program: Command): void {
       "--no-ingest",
       "Write ctx.yaml only — skip the wiki compilation step"
     )
+    .option(
+      "--scan",
+      "Force scan of sibling folders for git repos (auto-on when current dir has no .git)"
+    )
+    .option(
+      "--no-scan",
+      "Never scan sibling folders for git repos (useful in CI)"
+    )
+    .option("-y, --yes", "Skip all prompts (assume yes)")
     .action(async (options: GoOptions) => {
       const rootDir = resolve(process.cwd());
 
       console.log();
       console.log(chalk.bold.cyan("  ctx setup") + chalk.dim(" — let's get you set up"));
       console.log();
+
+      // ---------------------------------------------------------------
+      // Step 0: Sibling-repo scan
+      // ---------------------------------------------------------------
+      // If the user is in a workspace folder (~/work/acme) that holds
+      // several sibling repos, detect them and offer to add. Auto-on
+      // when current dir has no .git; opt-in via --scan otherwise;
+      // opt-out via --no-scan.
+      const currentIsGitRepo = existsSync(join(rootDir, ".git"));
+      const shouldScan =
+        options.scan === true ||
+        (options.scan !== false && !currentIsGitRepo);
+
+      let siblingRepos: DetectedRepo[] = [];
+      if (shouldScan) {
+        const found = scanForRepos(rootDir);
+        if (found.length > 0) {
+          console.log(
+            chalk.bold(`  Detected ${found.length} git repo(s) in this folder:`)
+          );
+          for (const repo of found) {
+            const loc = repo.github
+              ? chalk.dim(repo.github.replace(/^https?:\/\//, ""))
+              : chalk.dim("(no origin remote)");
+            const branch = repo.branch ? chalk.dim(` [${repo.branch}]`) : "";
+            console.log(`    ${chalk.cyan(repo.name.padEnd(20))} ${loc}${branch}`);
+          }
+          console.log();
+
+          const accepted = options.yes === true
+            ? true
+            : await confirmPrompt(
+                "  Add them all to ctx.yaml? (Y/n) ",
+                true
+              );
+
+          if (accepted) {
+            siblingRepos = found;
+          } else {
+            console.log(chalk.dim("  Skipping sibling repos."));
+            console.log();
+          }
+        }
+      }
 
       // ---------------------------------------------------------------
       // Step 1: Init
@@ -483,6 +603,7 @@ export function registerGoCommand(program: Command): void {
           org: options.org,
           token: githubToken,
           spinner: initSpinner,
+          siblingRepos,
           ...(options.name !== undefined && { projectNameOverride: options.name }),
         });
       } catch (error) {
