@@ -118,7 +118,7 @@ Include an updated index.md if you created a new page.
 ${existingContent || "No existing pages yet."}
 `;
 
-        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4");
+        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
         const available = await claude.isAvailable();
         if (!available) {
           spinner.fail(chalk.red("Claude CLI not found."));

@@ -135,7 +135,7 @@ export function registerLintCommand(program: Command): void {
         spinner.text = "Checking for contradictions with Claude...";
         let claudeIssues: LintIssue[] = [];
 
-        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4");
+        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
         const available = await claude.isAvailable();
 
         if (available) {

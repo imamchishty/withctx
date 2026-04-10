@@ -40,6 +40,27 @@ const IMAGE_MEDIA_TYPES: Record<string, "image/png" | "image/jpeg" | "image/gif"
   ".webp": "image/webp",
 };
 
+export interface ClaudeClientOptions {
+  /**
+   * Base URL for the API. Overrides the SDK default
+   * (`https://api.anthropic.com`).
+   *
+   * Resolution order:
+   *   1. This option (e.g. from `ctx.yaml` `ai.base_url`)
+   *   2. The `ANTHROPIC_BASE_URL` env var (handled by the SDK itself)
+   *   3. The SDK default
+   *
+   * Useful for:
+   *   - LLM gateways (LiteLLM, Portkey, Cloudflare AI Gateway)
+   *   - Corporate proxies / egress allowlists
+   *   - Self-hosted Anthropic-compatible endpoints
+   *   - Mock servers in tests
+   */
+  baseURL?: string;
+  /** Override the API key (otherwise `ANTHROPIC_API_KEY` from env). */
+  apiKey?: string;
+}
+
 /**
  * Claude client using the Anthropic SDK.
  * Direct API calls with exact token tracking, streaming, and prompt caching.
@@ -47,10 +68,36 @@ const IMAGE_MEDIA_TYPES: Record<string, "image/png" | "image/jpeg" | "image/gif"
 export class ClaudeClient {
   private client: Anthropic;
   private defaultModel: string;
+  private baseURL: string;
 
-  constructor(model: string = "claude-sonnet-4-20250514") {
-    this.client = new Anthropic();
+  constructor(
+    model: string = "claude-sonnet-4-20250514",
+    options?: ClaudeClientOptions
+  ) {
+    // Only pass explicit keys to the SDK — if they're undefined the SDK
+    // falls back to env vars (ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL) and
+    // finally to its own defaults.
+    const sdkOptions: ConstructorParameters<typeof Anthropic>[0] = {};
+    if (options?.baseURL) sdkOptions.baseURL = options.baseURL;
+    if (options?.apiKey) sdkOptions.apiKey = options.apiKey;
+
+    this.client = new Anthropic(sdkOptions);
     this.defaultModel = model;
+
+    // Remember what URL we're actually hitting — useful for `ctx doctor`
+    // and for debugging "am I really talking to Anthropic?" situations.
+    this.baseURL =
+      options?.baseURL ??
+      process.env.ANTHROPIC_BASE_URL ??
+      "https://api.anthropic.com";
+  }
+
+  /**
+   * Return the API base URL this client is configured to hit.
+   * Reflects the runtime resolution (option > env var > SDK default).
+   */
+  getBaseURL(): string {
+    return this.baseURL;
   }
 
   /**

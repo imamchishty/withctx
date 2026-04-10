@@ -472,7 +472,7 @@ export function registerIngestCommand(program: Command): void {
         }
 
         // Check Claude availability
-        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4");
+        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
         const available = await claude.isAvailable();
         if (!available) {
           console.error(

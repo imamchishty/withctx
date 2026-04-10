@@ -120,7 +120,7 @@ export function registerImportCommand(program: Command): void {
         }
 
         // Check Claude availability
-        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4");
+        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
         const compileSpinner = ora(
           asPage
             ? `Importing as ${chalk.cyan(asPage)} with Claude...`

@@ -135,6 +135,30 @@ describe('ClaudeClient.prompt — prompt caching', () => {
   });
 });
 
+describe('ClaudeClient — configurable base URL', () => {
+  it('defaults to https://api.anthropic.com when no override is given', () => {
+    delete process.env.ANTHROPIC_BASE_URL;
+    const client = new ClaudeClient();
+    expect(client.getBaseURL()).toBe('https://api.anthropic.com');
+  });
+
+  it('honours an explicit baseURL option over the env var', () => {
+    process.env.ANTHROPIC_BASE_URL = 'https://env-gateway.example.com';
+    const client = new ClaudeClient('claude-sonnet-4-20250514', {
+      baseURL: 'https://opt-gateway.example.com',
+    });
+    expect(client.getBaseURL()).toBe('https://opt-gateway.example.com');
+    delete process.env.ANTHROPIC_BASE_URL;
+  });
+
+  it('falls back to ANTHROPIC_BASE_URL when no option is given', () => {
+    process.env.ANTHROPIC_BASE_URL = 'https://env-gateway.example.com';
+    const client = new ClaudeClient();
+    expect(client.getBaseURL()).toBe('https://env-gateway.example.com');
+    delete process.env.ANTHROPIC_BASE_URL;
+  });
+});
+
 describe('Prompt caching cost math', () => {
   // Claude Sonnet 4 input pricing from src/costs/tracker.ts: $3/M input tokens
   const SONNET_INPUT_PER_MTOK = 3;

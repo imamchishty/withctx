@@ -381,7 +381,7 @@ async function runIngest(
 
   spinner.text = `Compiling ${allDocs.length} documents into wiki...`;
 
-  const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4");
+  const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
   let pageCount = 0;
   let tokenCount = 0;
 

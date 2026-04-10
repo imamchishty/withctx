@@ -117,7 +117,7 @@ export function registerPackCommand(program: Command): void {
         // If query-focused, use Claude to rank relevance
         if (options.query) {
           spinner.text = "Ranking pages by relevance...";
-          const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4");
+          const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
           const available = await claude.isAvailable();
 
           if (available) {

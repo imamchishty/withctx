@@ -62,7 +62,7 @@ export async function registerQueryRoutes(
       }));
 
       const model = fastify.config.costs?.model ?? "claude-sonnet-4";
-      const claude = new ClaudeClient(model);
+      const claude = new ClaudeClient(model, { baseURL: fastify.config.ai?.base_url });
 
       const response = await claude.promptWithFiles(
         `Answer this question using the wiki pages provided as context. Be concise and cite the page paths when referencing information.\n\nQuestion: ${question}`,

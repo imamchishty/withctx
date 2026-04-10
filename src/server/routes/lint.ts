@@ -48,7 +48,7 @@ export async function registerLintRoutes(
       const body = request.body ?? {};
 
       const model = fastify.config.costs?.model ?? "claude-sonnet-4";
-      const claude = new ClaudeClient(model);
+      const claude = new ClaudeClient(model, { baseURL: fastify.config.ai?.base_url });
 
       // Get source freshness for staleness checks
       const sourceCache = new SourceCacheManager(fastify.ctx);

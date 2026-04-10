@@ -57,7 +57,7 @@ async function syncSource(
   console.log(chalk.cyan(`  [${timestamp()}] ${docs.length} changed document(s) from ${sourceName}`));
 
   // Check Claude availability
-  const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4");
+  const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
   const available = await claude.isAvailable();
   if (!available) {
     console.log(chalk.red(`  [${timestamp()}] Claude API not available — skipping compilation`));

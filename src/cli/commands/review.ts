@@ -293,7 +293,7 @@ ${diff}
 \`\`\``;
 
         // 4. Call Claude
-        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4");
+        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
         const response = await claude.promptWithFiles(userPrompt, wikiPages, {
           systemPrompt,
           maxTokens: options.maxTokens ? parseInt(options.maxTokens, 10) : 8192,

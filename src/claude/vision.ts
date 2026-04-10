@@ -14,13 +14,16 @@ import { existsSync } from "node:fs";
  */
 export async function processImage(
   imagePath: string,
-  context: string
+  context: string,
+  options?: { baseURL?: string }
 ): Promise<string> {
   if (!existsSync(imagePath)) {
     throw new Error(`Image not found: ${imagePath}`);
   }
 
-  const client = new ClaudeClient("claude-haiku-3.5-20241022"); // Vision on cheap model
+  const client = new ClaudeClient("claude-haiku-3.5-20241022", {
+    baseURL: options?.baseURL,
+  }); // Vision on cheap model
 
   const prompt = buildVisionPrompt(context);
 

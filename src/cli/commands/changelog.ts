@@ -314,7 +314,7 @@ export function registerChangelogCommand(program: Command): void {
         // Send to Claude
         spinner.text = "Generating changelog with Claude...";
 
-        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4");
+        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
         const maxTokens = options.maxTokens ? parseInt(options.maxTokens, 10) : 4096;
 
         const response = contextFiles.length > 0

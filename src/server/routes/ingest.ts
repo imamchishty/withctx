@@ -83,7 +83,7 @@ async function ingestDirectContent(
 ): Promise<{ pagesCreated: number; pagesUpdated: number; message: string }> {
   const pm = new PageManager(fastify.ctx);
   const model = fastify.config.costs?.model ?? "claude-sonnet-4";
-  const claude = new ClaudeClient(model);
+  const claude = new ClaudeClient(model, { baseURL: fastify.config.ai?.base_url });
 
   const title = body.title ?? "Untitled Document";
   const content = body.content ?? "";

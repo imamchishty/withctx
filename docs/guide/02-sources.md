@@ -134,6 +134,41 @@ Use shell vars to switch JQL/CQL between dev and CI without forking config.
 
 ---
 
+## AI provider — point at a different endpoint
+
+By default withctx talks to `https://api.anthropic.com` using your `ANTHROPIC_API_KEY`. You can redirect it anywhere that speaks the Anthropic Messages API.
+
+```yaml
+ai:
+  base_url: https://my-gateway.example.com    # any Anthropic-compatible endpoint
+```
+
+Or via env var (the SDK picks it up automatically):
+
+```bash
+export ANTHROPIC_BASE_URL=https://my-gateway.example.com
+```
+
+The `ai.base_url` in `ctx.yaml` wins if both are set.
+
+Common use cases:
+
+| Use case | What to set |
+|---|---|
+| LLM gateway (LiteLLM, Portkey, Cloudflare AI Gateway) | `ai.base_url` to the gateway URL |
+| Corporate egress proxy | `ai.base_url` or `HTTPS_PROXY` env var |
+| Self-hosted Anthropic-compatible endpoint (vLLM, Bedrock Anthropic with a proxy) | `ai.base_url` to the local endpoint |
+| Mock server in tests | `ai.base_url` to the mock URL |
+| Split dev/prod keys across endpoints | per-environment `ctx.yaml` files |
+
+Run `ctx doctor` after changing it — when `base_url` is not the default, the API-connection check prints the URL it's actually hitting so you can confirm.
+
+```
+✓ API connection: Connected (claude-sonnet-4-20250514) via https://my-gateway.example.com
+```
+
+---
+
 ## What withctx does NOT need
 
 - A vector DB (SQLite chunks live in `.ctx/`)

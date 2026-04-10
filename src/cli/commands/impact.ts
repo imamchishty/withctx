@@ -206,7 +206,7 @@ export function registerImpactCommand(program: Command): void {
         // Send to Claude
         spinner.text = `Analyzing impact of: "${change.slice(0, 60)}${change.length > 60 ? "..." : ""}"`;
 
-        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4");
+        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
         const maxTokens = options.maxTokens ? parseInt(options.maxTokens, 10) : 8192;
 
         const response = await claude.promptWithFiles(prompt, contextFiles, {

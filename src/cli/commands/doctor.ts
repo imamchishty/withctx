@@ -164,7 +164,7 @@ function checkApiKey(): CheckResult {
   };
 }
 
-async function checkApiConnection(): Promise<CheckResult> {
+async function checkApiConnection(config?: CtxConfig | null): Promise<CheckResult> {
   if (!envIsSet("ANTHROPIC_API_KEY")) {
     return {
       label: "API connection",
@@ -177,15 +177,21 @@ async function checkApiConnection(): Promise<CheckResult> {
   const spinner = ora({ text: "Testing API connection...", indent: 2 }).start();
 
   try {
-    const client = new ClaudeClient();
+    const client = new ClaudeClient(
+      config?.costs?.model ?? "claude-sonnet-4-20250514",
+      { baseURL: config?.ai?.base_url }
+    );
     const available = await client.isAvailable();
+    const baseURL = client.getBaseURL();
+    const isDefault = baseURL === "https://api.anthropic.com";
+    const urlSuffix = isDefault ? "" : ` via ${baseURL}`;
 
     if (available) {
       spinner.stop();
       return {
         label: "API connection",
         status: "pass",
-        message: `Connected (${client.getModel()})`,
+        message: `Connected (${client.getModel()})${urlSuffix}`,
       };
     }
 
@@ -193,8 +199,10 @@ async function checkApiConnection(): Promise<CheckResult> {
     return {
       label: "API connection",
       status: "fail",
-      message: "API returned no content",
-      fix: "Check your API key is valid and has available credits at https://console.anthropic.com",
+      message: `API returned no content${urlSuffix}`,
+      fix: isDefault
+        ? "Check your API key is valid and has available credits at https://console.anthropic.com"
+        : `Check that ${baseURL} is reachable and speaks the Anthropic Messages API.`,
     };
   } catch (error) {
     spinner.stop();
@@ -504,15 +512,7 @@ export function registerDoctorCommand(program: Command): void {
       results.push(checkCtxDirectory());
       results.push(checkApiKey());
 
-      const apiResult = await checkApiConnection();
-      results.push(apiResult);
-
-      // Print environment results
-      for (const r of results) {
-        console.log(`  ${icon(r.status)} ${r.label}: ${statusColor(r.status, r.message)}`);
-      }
-
-      // ----- Source checks -----
+      // Load config early so the API check can honour ai.base_url.
       const configPath = findConfigFile();
       let config: CtxConfig | null = null;
       let projectRoot: string | null = null;
@@ -530,6 +530,14 @@ export function registerDoctorCommand(program: Command): void {
             fix: "Fix the syntax errors in ctx.yaml and re-run ctx doctor.",
           });
         }
+      }
+
+      const apiResult = await checkApiConnection(config);
+      results.push(apiResult);
+
+      // Print environment results
+      for (const r of results) {
+        console.log(`  ${icon(r.status)} ${r.label}: ${statusColor(r.status, r.message)}`);
       }
 
       if (config && projectRoot) {

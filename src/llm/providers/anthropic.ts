@@ -24,7 +24,7 @@ export class AnthropicProvider implements LLMProvider {
       process.env.ANTHROPIC_API_KEY = config.apiKey;
     }
 
-    this.client = new ClaudeClient(model);
+    this.client = new ClaudeClient(model, { baseURL: config?.baseUrl });
   }
 
   async prompt(text: string, options?: LLMOptions): Promise<LLMResponse> {

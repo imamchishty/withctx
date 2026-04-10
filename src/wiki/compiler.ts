@@ -240,7 +240,8 @@ export class WikiCompiler {
 
           const description = await processImage(
             tempPath,
-            `Image from document: ${doc.title}`
+            `Image from document: ${doc.title}`,
+            { baseURL: this.claude.getBaseURL() }
           );
 
           augmentedContent += `\n\n### Image: ${image.name}\n\n${description}`;

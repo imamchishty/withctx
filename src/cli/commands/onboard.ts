@@ -160,7 +160,7 @@ export function registerOnboardCommand(program: Command): void {
         // Generate with Claude
         spinner.text = "Generating onboarding guide with Claude...";
 
-        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4");
+        const claude = new ClaudeClient(config.costs?.model ?? "claude-sonnet-4", { baseURL: config.ai?.base_url });
 
         const nameClause = options.name ? ` Their name is ${options.name}.` : "";
         const roleLabel = role === "general" ? "new team member" : `new ${role} engineer`;

@@ -235,7 +235,8 @@ export function registerFaqCommand(program: Command): void {
         spinner.text = `Generating ${count} Q&As from ${contextFiles.length} wiki pages...`;
 
         const claude = new ClaudeClient(
-          config.costs?.model ?? "claude-sonnet-4"
+          config.costs?.model ?? "claude-sonnet-4",
+          { baseURL: config.ai?.base_url }
         );
         const costTracker = new CostTracker(ctxDir, {
           budget: config.costs?.budget,

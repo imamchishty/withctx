@@ -289,7 +289,7 @@ export function registerQueryCommand(program: Command): void {
 
         // --- 4. Call Claude ----------------------------------------------
         const queryModel = config.costs?.model ?? "claude-sonnet-4-20250514";
-        const claude = new ClaudeClient(queryModel);
+        const claude = new ClaudeClient(queryModel, { baseURL: config.ai?.base_url });
         const askSpinner = raw ? null : ora("Asking Claude...").start();
 
         const systemPrompt =
