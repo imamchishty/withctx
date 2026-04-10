@@ -48,6 +48,7 @@ import { registerGoCommand } from "./commands/go.js";
 import { registerSetupCommand } from "./commands/setup.js";
 import { registerGlossaryCommand } from "./commands/glossary.js";
 import { registerWhoCommand } from "./commands/who.js";
+import { registerTodosCommand } from "./commands/todos.js";
 
 // Global verbosity state — commands can import and check this
 export const globalState = {
@@ -402,5 +403,6 @@ registerGoCommand(program);
 registerSetupCommand(program);
 registerGlossaryCommand(program);
 registerWhoCommand(program);
+registerTodosCommand(program);
 
 program.parse(process.argv);
