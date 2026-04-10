@@ -25,17 +25,20 @@ export class OpenAIProvider implements LLMProvider {
   private client: OpenAI;
   private defaultModel: string;
   private baseURL: string;
+  private hasKey: boolean;
 
   constructor(config?: LLMConfig) {
     this.defaultModel = config?.model ?? "gpt-4o";
-    // The OpenAI SDK throws if apiKey is empty at construction time. For
-    // `ctx doctor` and tests we want to be able to instantiate the provider
-    // without a key just to read getBaseURL()/getModel(); a placeholder
-    // avoids the throw and any real request still fails with a clear
-    // "unauthorized" error from the remote endpoint.
+    // Env var wins over config.apiKey. The OpenAI SDK throws if apiKey is
+    // empty at construction time, so for `ctx doctor` and tests — where
+    // we want to instantiate the provider without a key just to read
+    // getBaseURL()/getModel() — we pass a placeholder. Any real request
+    // still fails with a clear "unauthorized" error from the endpoint.
+    const resolvedKey =
+      process.env.OPENAI_API_KEY ?? config?.apiKey ?? "missing-api-key";
+    this.hasKey = resolvedKey !== "missing-api-key";
     this.client = new OpenAI({
-      apiKey:
-        config?.apiKey ?? process.env.OPENAI_API_KEY ?? "missing-api-key",
+      apiKey: resolvedKey,
       ...(config?.baseUrl && { baseURL: config.baseUrl }),
     });
     // Track the effective base URL so `ctx doctor` can report traffic routing.
@@ -192,7 +195,7 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   async isAvailable(): Promise<boolean> {
-    return !!process.env.OPENAI_API_KEY;
+    return this.hasKey;
   }
 
   private toResponse(

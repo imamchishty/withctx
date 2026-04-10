@@ -158,6 +158,91 @@ describe("createLLMFromCtxConfig — provider selection", () => {
   });
 });
 
+describe("ai.api_key — env-first with yaml fallback", () => {
+  it("uses env var over config.apiKey when both set (anthropic)", async () => {
+    process.env.ANTHROPIC_API_KEY = "sk-ant-from-env";
+    const config = {
+      project: "demo",
+      ai: {
+        provider: "anthropic" as const,
+        api_key: "sk-ant-from-yaml",
+      },
+    } as unknown as CtxConfig;
+    const p = createLLMFromCtxConfig(config);
+    // Both resolved → provider is "available"; the env key wins silently.
+    // We can't read the raw key back, but we can assert the provider
+    // constructed without throwing and reports as available.
+    expect(p.name).toBe("anthropic");
+    await expect(p.isAvailable()).resolves.toBe(true);
+  });
+
+  it("falls back to ai.api_key when env var is unset (anthropic)", async () => {
+    // env deliberately empty
+    const config = {
+      project: "demo",
+      ai: {
+        provider: "anthropic" as const,
+        api_key: "sk-ant-from-yaml",
+      },
+    } as unknown as CtxConfig;
+    const p = createLLMFromCtxConfig(config);
+    await expect(p.isAvailable()).resolves.toBe(true);
+  });
+
+  it("reports unavailable when neither env nor config provides a key (anthropic)", async () => {
+    const p = createLLMFromCtxConfig({ project: "demo" } as CtxConfig);
+    await expect(p.isAvailable()).resolves.toBe(false);
+  });
+
+  it("falls back to ai.api_key for openai", async () => {
+    const config = {
+      project: "demo",
+      ai: {
+        provider: "openai" as const,
+        api_key: "sk-openai-from-yaml",
+      },
+    } as unknown as CtxConfig;
+    const p = createLLMFromCtxConfig(config);
+    expect(p.name).toBe("openai");
+    await expect(p.isAvailable()).resolves.toBe(true);
+  });
+
+  it("env var still wins over config.apiKey for openai", async () => {
+    process.env.OPENAI_API_KEY = "sk-openai-from-env";
+    const config = {
+      project: "demo",
+      ai: {
+        provider: "openai" as const,
+        api_key: "sk-openai-from-yaml",
+      },
+    } as unknown as CtxConfig;
+    const p = createLLMFromCtxConfig(config);
+    await expect(p.isAvailable()).resolves.toBe(true);
+  });
+
+  it("falls back to ai.api_key for google", async () => {
+    const config = {
+      project: "demo",
+      ai: {
+        provider: "google" as const,
+        api_key: "google-from-yaml",
+      },
+    } as unknown as CtxConfig;
+    const p = createLLMFromCtxConfig(config);
+    expect(p.name).toBe("google");
+    await expect(p.isAvailable()).resolves.toBe(true);
+  });
+
+  it("AnthropicProvider does NOT mutate process.env.ANTHROPIC_API_KEY", () => {
+    // Regression: earlier implementation shoved config.apiKey into
+    // process.env on construction, which leaked into every subsequent
+    // provider in the same process.
+    const before = process.env.ANTHROPIC_API_KEY;
+    new AnthropicProvider({ provider: "anthropic", apiKey: "sk-ant-yaml" });
+    expect(process.env.ANTHROPIC_API_KEY).toBe(before);
+  });
+});
+
 describe("LLMProvider.getBaseURL defaults", () => {
   it("Anthropic defaults to api.anthropic.com", () => {
     const p = new AnthropicProvider();

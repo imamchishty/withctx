@@ -25,11 +25,15 @@ export class GoogleProvider implements LLMProvider {
   private genAI: GoogleGenerativeAI;
   private defaultModel: string;
   private baseURL: string;
+  private hasKey: boolean;
 
   constructor(config?: LLMConfig) {
-    const apiKey = config?.apiKey ?? process.env.GOOGLE_API_KEY ?? "";
+    // Env var wins over config.apiKey — env is the canonical secret store,
+    // config.apiKey is a fallback for solo/local use.
+    const resolvedKey = process.env.GOOGLE_API_KEY ?? config?.apiKey ?? "";
+    this.hasKey = resolvedKey !== "";
     this.defaultModel = config?.model ?? "gemini-2.0-flash";
-    this.genAI = new GoogleGenerativeAI(apiKey);
+    this.genAI = new GoogleGenerativeAI(resolvedKey);
     // The Google SDK doesn't expose a configurable base URL — we track it
     // for reporting parity with other providers.
     this.baseURL =
@@ -192,7 +196,7 @@ export class GoogleProvider implements LLMProvider {
   }
 
   async isAvailable(): Promise<boolean> {
-    return !!process.env.GOOGLE_API_KEY;
+    return this.hasKey;
   }
 
   private getGenerativeModel(options?: LLMOptions) {

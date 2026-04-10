@@ -201,13 +201,27 @@ function checkApiKey(config?: CtxConfig | null): CheckResult {
     };
   }
 
+  // Env var wins.
   if (envIsSet(meta.envVar)) {
     const key = process.env[meta.envVar]!;
     const masked = key.slice(0, 8) + "..." + key.slice(-4);
     return {
       label: meta.envVar,
       status: "pass",
-      message: masked,
+      message: `${masked} ${chalk.dim("(from env)")}`,
+    };
+  }
+
+  // Fallback: ctx.yaml ai.api_key. Still counts as configured, but we
+  // warn rather than pass — env vars remain the recommended path.
+  if (config?.ai?.api_key && config.ai.api_key.trim().length > 0) {
+    const key = config.ai.api_key;
+    const masked = key.slice(0, 8) + "..." + key.slice(-4);
+    return {
+      label: meta.envVar,
+      status: "warn",
+      message: `${masked} ${chalk.dim("(from ctx.yaml ai.api_key)")}`,
+      fix: `Prefer env var: export ${meta.envVar}=<your-key>. Committing keys to ctx.yaml risks leaking them via git history.`,
     };
   }
 
@@ -215,7 +229,7 @@ function checkApiKey(config?: CtxConfig | null): CheckResult {
     label: meta.envVar,
     status: "fail",
     message: "Not set",
-    fix: `Export the key: export ${meta.envVar}=<your-key> (get one at ${meta.signupUrl})`,
+    fix: `Export the key: export ${meta.envVar}=<your-key> (get one at ${meta.signupUrl}). Or, for solo/local use, set ai.api_key in ctx.yaml.`,
   };
 }
 
@@ -225,12 +239,13 @@ async function checkApiConnection(
   const providerName = resolveProviderName(config);
   const meta = PROVIDER_META[providerName];
 
-  if (meta.keyRequired && !envIsSet(meta.envVar)) {
+  const yamlKey = config?.ai?.api_key?.trim();
+  if (meta.keyRequired && !envIsSet(meta.envVar) && !yamlKey) {
     return {
       label: "API connection",
       status: "fail",
-      message: `Skipped — ${meta.envVar} not set`,
-      fix: `Set ${meta.envVar} first.`,
+      message: `Skipped — no key (${meta.envVar} or ctx.yaml ai.api_key)`,
+      fix: `Set ${meta.envVar}, or add ai.api_key to ctx.yaml.`,
     };
   }
 

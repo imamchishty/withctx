@@ -14,17 +14,22 @@ import type {
 export class AnthropicProvider implements LLMProvider {
   readonly name = "anthropic";
   private client: ClaudeClient;
+  private hasKey: boolean;
 
   constructor(config?: LLMConfig) {
     const model = config?.model ?? "claude-sonnet-4-20250514";
 
-    // If a custom API key is provided, set it in the environment
-    // so the underlying Anthropic SDK picks it up.
-    if (config?.apiKey) {
-      process.env.ANTHROPIC_API_KEY = config.apiKey;
-    }
+    // Env var wins over config.apiKey — that's the whole point of env
+    // vars. config.apiKey is only a fallback for users who prefer a
+    // single committed ctx.yaml. We never mutate process.env; we pass
+    // the resolved key through ClaudeClient options instead.
+    const resolvedKey = process.env.ANTHROPIC_API_KEY ?? config?.apiKey;
+    this.hasKey = !!resolvedKey;
 
-    this.client = new ClaudeClient(model, { baseURL: config?.baseUrl });
+    this.client = new ClaudeClient(model, {
+      baseURL: config?.baseUrl,
+      ...(resolvedKey !== undefined && { apiKey: resolvedKey }),
+    });
   }
 
   async prompt(text: string, options?: LLMOptions): Promise<LLMResponse> {
@@ -97,7 +102,8 @@ export class AnthropicProvider implements LLMProvider {
   }
 
   async isAvailable(): Promise<boolean> {
-    return !!process.env.ANTHROPIC_API_KEY;
+    // Env var OR yaml fallback — both count as "configured".
+    return this.hasKey;
   }
 
   getModel(): string {

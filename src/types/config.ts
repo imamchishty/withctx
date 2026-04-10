@@ -166,6 +166,24 @@ const AiSchema = z.object({
   provider: z.enum(["anthropic", "openai", "google", "ollama"]).default("anthropic"),
   model: z.string().optional(),
   base_url: z.string().optional(),
+  /**
+   * API key for the selected provider.
+   *
+   * Resolution order at runtime:
+   *   1. The provider's env var (ANTHROPIC_API_KEY, OPENAI_API_KEY,
+   *      GOOGLE_API_KEY) — always wins if set.
+   *   2. This field (from `ctx.yaml`) — fallback.
+   *   3. Nothing — requests will fail with "unauthorized".
+   *
+   * Best practice is still to use env vars (especially in CI and shared
+   * repos). This field exists as an escape hatch for solo / local use
+   * where a single committed `ctx.yaml` is the simplest workflow.
+   *
+   * Supports `${VAR}` interpolation, so you can put
+   *   api_key: ${MY_KEY}
+   * in the file and keep the actual value in the environment anyway.
+   */
+  api_key: z.string().optional(),
   models: z.record(z.string()).optional(),
 });
 

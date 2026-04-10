@@ -136,7 +136,10 @@ function detectProviderForModel(
  *             ?? config.costs.model           (legacy location)
  *             ?? provider-specific default
  *   base_url  = config.ai.base_url            (passes through to the SDK)
- *   apiKey    = (left to env vars so secrets never land in config)
+ *   apiKey    = env var first (ANTHROPIC_API_KEY, OPENAI_API_KEY, etc.)
+ *             ?? config.ai.api_key            (yaml fallback — escape hatch
+ *                                              for solo/local use; env still
+ *                                              wins in CI and teams)
  *
  * If `operation` is given and `config.ai.models[operation]` is set, that
  * model override wins — including auto-switching to a *different* provider
@@ -161,6 +164,7 @@ export function createLLMFromCtxConfig(
     provider,
     ...(baseModel !== undefined && { model: baseModel }),
     ...(ai?.base_url !== undefined && { baseUrl: ai.base_url }),
+    ...(ai?.api_key !== undefined && { apiKey: ai.api_key }),
     ...(ai?.models !== undefined && { models: ai.models }),
   };
 

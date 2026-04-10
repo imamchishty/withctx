@@ -74,12 +74,13 @@ export class ClaudeClient {
     model: string = "claude-sonnet-4-20250514",
     options?: ClaudeClientOptions
   ) {
-    // Only pass explicit keys to the SDK — if they're undefined the SDK
-    // falls back to env vars (ANTHROPIC_API_KEY, ANTHROPIC_BASE_URL) and
-    // finally to its own defaults.
+    // Key resolution: env var wins, config value is a fallback. If neither
+    // is set we pass nothing and let the SDK produce its own error on the
+    // first request. baseURL still honours explicit config > env > default.
     const sdkOptions: ConstructorParameters<typeof Anthropic>[0] = {};
     if (options?.baseURL) sdkOptions.baseURL = options.baseURL;
-    if (options?.apiKey) sdkOptions.apiKey = options.apiKey;
+    const resolvedKey = process.env.ANTHROPIC_API_KEY ?? options?.apiKey;
+    if (resolvedKey) sdkOptions.apiKey = resolvedKey;
 
     this.client = new Anthropic(sdkOptions);
     this.defaultModel = model;
