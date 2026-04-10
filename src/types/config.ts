@@ -103,6 +103,7 @@ const NotionSourceSchema = z.object({
   database_ids: z.array(z.string()).optional(),
   page_ids: z.array(z.string()).optional(),
   token: z.string().optional(),
+  base_url: z.string().url().optional(),
 });
 
 const SlackSourceSchema = z.object({
@@ -110,6 +111,7 @@ const SlackSourceSchema = z.object({
   channels: z.array(z.string()),
   token: z.string().optional(),
   since: z.string().optional(),
+  base_url: z.string().url().optional(),
 });
 
 const SourcesSchema = z.object({

@@ -44,7 +44,7 @@ interface NotionBlocksResponse {
   next_cursor: string | null;
 }
 
-const NOTION_API_BASE = "https://api.notion.com/v1";
+const NOTION_API_BASE_DEFAULT = "https://api.notion.com/v1";
 const NOTION_VERSION = "2022-06-28";
 
 export class NotionConnector implements SourceConnector {
@@ -53,6 +53,7 @@ export class NotionConnector implements SourceConnector {
   private token: string;
   private databaseIds: string[];
   private pageIds: string[];
+  private baseUrl: string;
   private status: SourceStatus;
 
   constructor(config: NotionSource) {
@@ -60,6 +61,9 @@ export class NotionConnector implements SourceConnector {
     this.token = config.token || process.env.NOTION_TOKEN || "";
     this.databaseIds = config.database_ids || [];
     this.pageIds = config.page_ids || [];
+    // Custom base URL for testing (mock servers) or self-hosted notion-like services.
+    // Default is the public Notion API. Config accepts either with or without the /v1 suffix.
+    this.baseUrl = (config.base_url || NOTION_API_BASE_DEFAULT).replace(/\/$/, "");
     this.status = { name: config.name, type: "notion", status: "disconnected" };
   }
 
@@ -70,7 +74,7 @@ export class NotionConnector implements SourceConnector {
       return false;
     }
     try {
-      const response = await resilientFetch(`${NOTION_API_BASE}/users/me`, {
+      const response = await resilientFetch(`${this.baseUrl}/users/me`, {
         headers: this.getHeaders(),
       }, { rateLimitHeader: "retry-after" });
       if (!response.ok) {
@@ -139,7 +143,7 @@ export class NotionConnector implements SourceConnector {
       if (since) {
         body.filter = { timestamp: "last_edited_time", last_edited_time: { after: since.toISOString() } };
       }
-      const response = await resilientFetch(`${NOTION_API_BASE}/databases/${databaseId}/query`, {
+      const response = await resilientFetch(`${this.baseUrl}/databases/${databaseId}/query`, {
         method: "POST", headers: this.getHeaders(), body: JSON.stringify(body),
       }, { rateLimitHeader: "retry-after" });
       if (!response.ok) throw new Error(`Notion database query failed (${response.status})`);
@@ -151,7 +155,7 @@ export class NotionConnector implements SourceConnector {
   }
 
   private async fetchPage(pageId: string): Promise<NotionPage> {
-    const response = await resilientFetch(`${NOTION_API_BASE}/pages/${pageId}`, { headers: this.getHeaders() }, { rateLimitHeader: "retry-after" });
+    const response = await resilientFetch(`${this.baseUrl}/pages/${pageId}`, { headers: this.getHeaders() }, { rateLimitHeader: "retry-after" });
     if (!response.ok) throw new Error(`Notion page fetch failed (${response.status})`);
     return (await response.json()) as NotionPage;
   }
@@ -161,8 +165,8 @@ export class NotionConnector implements SourceConnector {
     let cursor: string | null = null;
     do {
       const url = cursor
-        ? `${NOTION_API_BASE}/blocks/${blockId}/children?start_cursor=${cursor}`
-        : `${NOTION_API_BASE}/blocks/${blockId}/children`;
+        ? `${this.baseUrl}/blocks/${blockId}/children?start_cursor=${cursor}`
+        : `${this.baseUrl}/blocks/${blockId}/children`;
       const response = await resilientFetch(url, { headers: this.getHeaders() }, { rateLimitHeader: "retry-after" });
       if (!response.ok) throw new Error(`Notion blocks fetch failed (${response.status})`);
       const data = (await response.json()) as NotionBlocksResponse;

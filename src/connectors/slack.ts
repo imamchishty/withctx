@@ -21,7 +21,7 @@ interface SlackHistoryResponse { ok: boolean; messages: SlackMessage[]; has_more
 interface SlackRepliesResponse { ok: boolean; messages: SlackMessage[]; error?: string; }
 interface SlackUserResponse { ok: boolean; user?: { real_name: string; name: string }; error?: string; }
 
-const SLACK_API = "https://slack.com/api";
+const SLACK_API_DEFAULT = "https://slack.com/api";
 
 const NOISE_PATTERNS = [
   /^(hi|hello|hey|morning|thanks|thank you|ty|thx|ok|okay|sure|yes|no|yep|nope)\s*$/i,
@@ -36,6 +36,7 @@ export class SlackConnector implements SourceConnector {
   private token: string;
   private channelNames: string[];
   private since?: string;
+  private baseUrl: string;
   private status: SourceStatus;
   private userCache = new Map<string, string>();
 
@@ -44,6 +45,7 @@ export class SlackConnector implements SourceConnector {
     this.token = config.token || process.env.SLACK_TOKEN || "";
     this.channelNames = config.channels;
     this.since = config.since;
+    this.baseUrl = (config.base_url || SLACK_API_DEFAULT).replace(/\/$/, "");
     this.status = { name: config.name, type: "slack", status: "disconnected" };
   }
 
@@ -105,7 +107,7 @@ export class SlackConnector implements SourceConnector {
   getStatus(): SourceStatus { return { ...this.status }; }
 
   private async slackApi(method: string, params?: Record<string, string>): Promise<Record<string, unknown>> {
-    const url = new URL(`${SLACK_API}/${method}`);
+    const url = new URL(`${this.baseUrl}/${method}`);
     if (params) for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v);
     const response = await resilientFetch(url.toString(), {
       headers: { Authorization: `Bearer ${this.token}` },
