@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import chalk from "chalk";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
@@ -63,14 +63,23 @@ function extractOwnershipFromContent(content: string): string[] {
 
 /**
  * Get the last git committer for a file path.
+ *
+ * Uses argv form (execFileSync) so a wiki page with a hostile name
+ * like `test.md"; rm -rf / #` cannot inject a shell command. The
+ * trailing `--` tells git "everything after this is a pathspec,
+ * never a flag".
  */
 function getGitAuthor(filePath: string): string | null {
   try {
-    const result = execSync(`git log --format='%an' -1 -- "${filePath}"`, {
-      encoding: "utf-8",
-      timeout: 5000,
-      stdio: ["pipe", "pipe", "pipe"],
-    }).trim();
+    const result = execFileSync(
+      "git",
+      ["log", "--format=%an", "-1", "--", filePath],
+      {
+        encoding: "utf-8",
+        timeout: 5000,
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    ).trim();
     return result || null;
   } catch {
     return null;

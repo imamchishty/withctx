@@ -106,10 +106,13 @@ export function registerResetCommand(program: Command): void {
           console.log(chalk.dim("Running full ingest..."));
           console.log();
 
-          // Dynamically import and invoke the ingest command
-          const { execSync } = await import("node:child_process");
+          // Dynamically import and invoke the ingest command. argv
+          // form because `npx ctx ingest` takes no user input today,
+          // but someone will inevitably add a flag here, and this
+          // keeps the pattern injection-proof by construction.
+          const { execFileSync } = await import("node:child_process");
           try {
-            execSync("npx ctx ingest", {
+            execFileSync("npx", ["ctx", "ingest"], {
               cwd: projectRoot,
               stdio: "inherit",
             });

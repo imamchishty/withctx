@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import chalk from "chalk";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { writeFileSync, statSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
@@ -124,11 +124,15 @@ function getGitWikiHistory(projectRoot: string): TimelineEvent[] {
   const events: TimelineEvent[] = [];
 
   try {
-    const gitLog = execSync('git log --format="%aI|%s" -- .ctx/', {
-      cwd: projectRoot,
-      encoding: "utf-8",
-      maxBuffer: 10 * 1024 * 1024,
-    }).trim();
+    const gitLog = execFileSync(
+      "git",
+      ["log", "--format=%aI|%s", "--", ".ctx/"],
+      {
+        cwd: projectRoot,
+        encoding: "utf-8",
+        maxBuffer: 10 * 1024 * 1024,
+      },
+    ).trim();
 
     if (!gitLog) return events;
 

@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import ora from "ora";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
@@ -77,20 +77,30 @@ function parseSinceFlag(since: string, projectRoot: string): { date: string; lab
     return { date: since, label: `since ${since}` };
   }
 
-  // Git tag: try to resolve the tag to a date
-  try {
-    const tagDate = execSync(`git log -1 --format=%ai "${since}"`, {
-      cwd: projectRoot,
-      encoding: "utf-8",
-    }).trim();
-    if (tagDate) {
-      return {
-        date: tagDate.split(" ")[0],
-        label: `since tag ${since}`,
-      };
+  // Git tag or rev: validate against a conservative refname pattern
+  // before handing it to git. A refname with `;` or `$(...)` would
+  // otherwise slip through even the argv form of execFileSync because
+  // git happily accepts weird tag names, and we don't want a hostile
+  // `--since` value flowing anywhere near a shell.
+  if (/^[A-Za-z0-9._/-]+$/.test(since) && !since.startsWith("-")) {
+    try {
+      const tagDate = execFileSync(
+        "git",
+        ["log", "-1", "--format=%ai", since],
+        {
+          cwd: projectRoot,
+          encoding: "utf-8",
+        },
+      ).trim();
+      if (tagDate) {
+        return {
+          date: tagDate.split(" ")[0],
+          label: `since tag ${since}`,
+        };
+      }
+    } catch {
+      // Not a valid tag — treat as date string
     }
-  } catch {
-    // Not a valid tag — treat as date string
   }
 
   return { date: since, label: `since ${since}` };
@@ -101,16 +111,31 @@ function parseSinceFlag(since: string, projectRoot: string): { date: string; lab
  */
 function getDefaultSinceDate(projectRoot: string): { date: string; label: string } {
   try {
-    const lastTag = execSync("git describe --tags --abbrev=0 2>/dev/null", {
-      cwd: projectRoot,
-      encoding: "utf-8",
-    }).trim();
-
-    if (lastTag) {
-      const tagDate = execSync(`git log -1 --format=%ai "${lastTag}"`, {
+    const lastTag = execFileSync(
+      "git",
+      ["describe", "--tags", "--abbrev=0"],
+      {
         cwd: projectRoot,
         encoding: "utf-8",
-      }).trim();
+        // stderr swallowed so "fatal: No names found" from a
+        // tag-less repo doesn't pollute the terminal.
+        stdio: ["pipe", "pipe", "ignore"],
+      },
+    ).trim();
+
+    // Re-validate git's own output: in theory a malicious tag name
+    // could smuggle characters back out through git. We only accept
+    // conservative refname characters before using lastTag in
+    // another git call.
+    if (lastTag && /^[A-Za-z0-9._/-]+$/.test(lastTag)) {
+      const tagDate = execFileSync(
+        "git",
+        ["log", "-1", "--format=%ai", lastTag],
+        {
+          cwd: projectRoot,
+          encoding: "utf-8",
+        },
+      ).trim();
       return {
         date: tagDate.split(" ")[0],
         label: `since tag ${lastTag}`,
@@ -132,12 +157,25 @@ function getDefaultSinceDate(projectRoot: string): { date: string; label: string
  * Gather git log commits since a given date.
  */
 function getGitCommits(projectRoot: string, sinceDate: string): string {
+  // Defensive: sinceDate flows in from user input via parseSinceFlag.
+  // Even though argv form protects us from shell injection, git itself
+  // accepts things like `--pretty=` after `--since=`, so we pin the
+  // value to a YYYY-MM-DD shape (which is what our parser produces
+  // for every branch except the tag fallback, which has already been
+  // resolved to a date by getDefaultSinceDate / parseSinceFlag).
+  const normalised = /^\d{4}-\d{2}-\d{2}$/.test(sinceDate)
+    ? sinceDate
+    : sinceDate.replace(/[^A-Za-z0-9 :,/-]/g, "");
   try {
-    return execSync(`git log --oneline --since="${sinceDate}"`, {
-      cwd: projectRoot,
-      encoding: "utf-8",
-      maxBuffer: 10 * 1024 * 1024,
-    }).trim();
+    return execFileSync(
+      "git",
+      ["log", "--oneline", `--since=${normalised}`],
+      {
+        cwd: projectRoot,
+        encoding: "utf-8",
+        maxBuffer: 10 * 1024 * 1024,
+      },
+    ).trim();
   } catch {
     return "";
   }
