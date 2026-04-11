@@ -132,6 +132,15 @@ const GitHubSourceSchema = z.object({
   token: z.string(),
   owner: z.string(),
   repo: z.string().optional(),
+  /**
+   * Optional GitHub Enterprise API base URL. Omit for github.com.
+   *
+   * Goes through SafeHttpUrl so a hostile config cannot point Octokit
+   * at `http://169.254.169.254/` or an internal service. Validated
+   * with the same scheme + private-IP rules as every other `base_url`
+   * in this file.
+   */
+  base_url: SafeHttpUrl.optional(),
 });
 
 const TeamsSourceSchema = z.object({
@@ -173,7 +182,15 @@ const PullRequestsSourceSchema = z.object({
 const OpenApiSourceSchema = z.object({
   name: z.string(),
   path: z.string().optional(),
-  url: z.string().url().optional(),
+  /**
+   * Remote URL to fetch the OpenAPI / Swagger spec from. Goes through
+   * SafeHttpUrl so an ctx.yaml cannot aim the connector at
+   * `http://169.254.169.254/latest/meta-data/` or an internal API.
+   *
+   * This URL is handed directly to `resilientFetch` — the SSRF guard
+   * has to live in the schema, not at the call site.
+   */
+  url: SafeHttpUrl.optional(),
 });
 
 const NotionSourceSchema = z.object({

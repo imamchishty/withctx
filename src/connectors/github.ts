@@ -6,7 +6,9 @@ import type { GitHubSource } from "../types/config.js";
 /**
  * Connector for GitHub repositories.
  * Uses @octokit/rest to fetch repos, READMEs, issues, and PRs.
- * Supports GitHub Enterprise via custom baseUrl.
+ * Supports GitHub Enterprise via `sources.github[].base_url` in ctx.yaml.
+ * The config field is SafeHttpUrl-validated so a hostile config cannot
+ * point Octokit at metadata endpoints or internal services.
  */
 export class GitHubConnector implements SourceConnector {
   readonly type = "github" as const;
@@ -16,7 +18,7 @@ export class GitHubConnector implements SourceConnector {
   private repo?: string;
   private status: SourceStatus;
 
-  constructor(config: GitHubSource & { baseUrl?: string }) {
+  constructor(config: GitHubSource) {
     this.name = config.name;
     this.owner = config.owner;
     this.repo = config.repo;
@@ -29,8 +31,12 @@ export class GitHubConnector implements SourceConnector {
     const octokitOptions: ConstructorParameters<typeof Octokit>[0] = {
       auth: config.token,
     };
-    if (config.baseUrl) {
-      octokitOptions.baseUrl = config.baseUrl;
+    // Octokit uses camelCase (`baseUrl`) while ctx.yaml uses snake_case
+    // (`base_url`) to match the rest of the source schemas. The Zod
+    // refinement on SafeHttpUrl has already blocked private IPs and
+    // non-http(s) schemes before we get here.
+    if (config.base_url) {
+      octokitOptions.baseUrl = config.base_url;
     }
     this.octokit = new Octokit(octokitOptions);
   }

@@ -190,3 +190,149 @@ describe('loadConfig', () => {
     }
   });
 });
+
+describe('SafeHttpUrl SSRF guard', () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = join(tmpdir(), `withctx-ssrf-${randomUUID()}`);
+    mkdirSync(tempDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  // A matrix of (connector, base_url, expectRejection) cases. The guard
+  // has to fire uniformly across every source that takes a URL from
+  // ctx.yaml, not just the ones we remembered to test.
+  const rejectCases: Array<{ label: string; yaml: string[] }> = [
+    {
+      label: 'jira base_url on AWS metadata endpoint',
+      yaml: [
+        'project: ssrf-jira',
+        'sources:',
+        '  jira:',
+        '    - name: evil',
+        '      base_url: http://169.254.169.254/',
+        '      token: x',
+      ],
+    },
+    {
+      label: 'confluence base_url on localhost',
+      yaml: [
+        'project: ssrf-confluence',
+        'sources:',
+        '  confluence:',
+        '    - name: evil',
+        '      base_url: http://127.0.0.1:8080/',
+        '      token: x',
+      ],
+    },
+    {
+      label: 'notion base_url with file:// scheme',
+      yaml: [
+        'project: ssrf-notion',
+        'sources:',
+        '  notion:',
+        '    - name: evil',
+        '      base_url: file:///etc/passwd',
+      ],
+    },
+    {
+      label: 'slack base_url on RFC1918 10.x',
+      yaml: [
+        'project: ssrf-slack',
+        'sources:',
+        '  slack:',
+        '    - name: evil',
+        '      channels: [general]',
+        '      base_url: http://10.0.0.1/',
+      ],
+    },
+    {
+      label: 'github base_url on metadata endpoint',
+      yaml: [
+        'project: ssrf-github',
+        'sources:',
+        '  github:',
+        '    - name: evil',
+        '      token: x',
+        '      owner: acme',
+        '      base_url: http://169.254.169.254/',
+      ],
+    },
+    {
+      label: 'openapi url on internal elasticsearch',
+      yaml: [
+        'project: ssrf-openapi',
+        'sources:',
+        '  openapi:',
+        '    - name: evil',
+        '      url: http://127.0.0.1:9200/openapi.json',
+      ],
+    },
+    {
+      label: 'openapi url with ftp:// scheme',
+      yaml: [
+        'project: ssrf-openapi-ftp',
+        'sources:',
+        '  openapi:',
+        '    - name: evil',
+        '      url: ftp://example.com/openapi.yaml',
+      ],
+    },
+  ];
+
+  for (const { label, yaml } of rejectCases) {
+    it(`rejects ${label}`, () => {
+      const configPath = join(tempDir, 'ctx.yaml');
+      writeFileSync(configPath, yaml.join('\n'));
+      expect(() => loadConfig(configPath)).toThrow();
+    });
+  }
+
+  it('accepts a normal public https base_url', () => {
+    const configPath = join(tempDir, 'ctx.yaml');
+    writeFileSync(
+      configPath,
+      [
+        'project: ssrf-ok',
+        'sources:',
+        '  jira:',
+        '    - name: prod',
+        '      base_url: https://acme.atlassian.net',
+        '      token: x',
+      ].join('\n')
+    );
+    const config = loadConfig(configPath);
+    expect(config.sources?.jira?.[0].base_url).toBe('https://acme.atlassian.net');
+  });
+
+  it('honours WITHCTX_ALLOW_PRIVATE_URLS=1 escape hatch for dev', () => {
+    const configPath = join(tempDir, 'ctx.yaml');
+    writeFileSync(
+      configPath,
+      [
+        'project: ssrf-dev',
+        'sources:',
+        '  jira:',
+        '    - name: dev',
+        '      base_url: http://127.0.0.1:8080',
+        '      token: x',
+      ].join('\n')
+    );
+    const original = process.env.WITHCTX_ALLOW_PRIVATE_URLS;
+    process.env.WITHCTX_ALLOW_PRIVATE_URLS = '1';
+    try {
+      const config = loadConfig(configPath);
+      expect(config.sources?.jira?.[0].base_url).toBe('http://127.0.0.1:8080');
+    } finally {
+      if (original === undefined) {
+        delete process.env.WITHCTX_ALLOW_PRIVATE_URLS;
+      } else {
+        process.env.WITHCTX_ALLOW_PRIVATE_URLS = original;
+      }
+    }
+  });
+});
