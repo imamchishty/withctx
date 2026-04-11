@@ -3,38 +3,41 @@ import chalk from "chalk";
 import ora from "ora";
 import { createInterface } from "node:readline";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
+import { checkRefreshPolicy } from "../../config/refresh-policy.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
+import {
+  detectRunbook,
+  renderRunbookPageWithFreshness,
+  hasRunbookContent,
+} from "../../wiki/runbook.js";
 import { createLLMFromCtxConfig } from "../../llm/index.js";
 import { ConnectorRegistry } from "../../connectors/registry.js";
 import { LocalFilesConnector } from "../../connectors/local-files.js";
+import { safeResolve } from "../../security/paths.js";
 import { safeGenerate } from "../../connectors/safe-generator.js";
 import { progressBar, formatCost, formatTokens, formatDuration } from "../utils/progress.js";
 import type { RawDocument } from "../../types/source.js";
 import type { SourceConnector } from "../../connectors/types.js";
-import { recordCall, recordSnapshot } from "../../usage/recorder.js";
+import { recordCall, recordSnapshot, resolvePricing } from "../../usage/recorder.js";
+import { assertWithinBudget, BudgetExceededError, checkBudgetWarning } from "../../usage/budget.js";
+import { confirmForcedRefresh } from "../../usage/refresh-context.js";
 
 interface IngestOptions {
   maxTokens?: string;
   dryRun?: boolean;
   yes?: boolean;
+  allowLocalRefresh?: boolean;
 }
-
-/** Model pricing per million tokens (input/output) */
-const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  "claude-sonnet-4": { input: 3, output: 15 },
-  "claude-sonnet-4-20250514": { input: 3, output: 15 },
-  "claude-opus-4": { input: 15, output: 75 },
-  "claude-haiku-3.5": { input: 0.8, output: 4 },
-  "claude-3-5-haiku-20241022": { input: 0.8, output: 4 },
-};
 
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
 function estimateCost(tokens: number, model: string): { input: number; output: number; total: number } {
-  const pricing = MODEL_PRICING[model] ?? MODEL_PRICING["claude-sonnet-4"];
+  // Rough estimate. Pricing resolved from ai.pricing override first, then
+  // built-in table, then Sonnet fallback. Used for pre-flight warnings.
+  const pricing = resolvePricing(model) ?? resolvePricing("claude-sonnet-4")!;
   const inputCost = (tokens / 1_000_000) * pricing.input;
   // Estimate output at ~30% of input tokens
   const estimatedOutputTokens = Math.ceil(tokens * 0.3);
@@ -111,12 +114,23 @@ function getConnectorErrorHelp(connectorType: string, error: string): string {
 function buildConnectors(config: ReturnType<typeof loadConfig>, projectRoot: string): ConnectorRegistry {
   const registry = new ConnectorRegistry();
 
-  // Register local sources
+  // Register local sources. Every path is funnelled through
+  // `safeResolve` so a malicious ctx.yaml (`sources.local[].path:
+  // ../../etc/passwd` or `/etc/passwd`) cannot escape the project
+  // root. Entries that fail the safety check are silently dropped —
+  // we don't want one bad row to take out the whole ingest, and
+  // `ctx doctor` will flag them on its next run.
   if (config.sources?.local) {
     for (const source of config.sources.local) {
-      const resolvedPath = source.path.startsWith(".")
-        ? `${projectRoot}/${source.path}`
-        : source.path;
+      const resolvedPath = safeResolve(source.path, projectRoot);
+      if (resolvedPath === null) {
+        console.warn(
+          chalk.yellow(
+            `  ⚠ skipping source "${source.name}" — path "${source.path}" escapes project root`
+          )
+        );
+        continue;
+      }
       registry.register(new LocalFilesConnector(source.name, resolvedPath));
     }
   }
@@ -298,6 +312,10 @@ export function registerIngestCommand(program: Command): void {
     .option("--max-tokens <n>", "Max tokens for Claude response")
     .option("--dry-run", "Show what would be ingested without calling Claude")
     .option("-y, --yes", "Skip cost confirmation")
+    .option(
+      "--allow-local-refresh",
+      "Bypass the refreshed_by: ci guardrail (use with care — burns budget)"
+    )
     .action(async (options: IngestOptions) => {
       const spinner = ora("Loading configuration...").start();
 
@@ -309,6 +327,34 @@ export function registerIngestCommand(program: Command): void {
         if (!ctxDir.exists()) {
           spinner.fail(chalk.red("No .ctx/ directory found. Run 'ctx setup' first."));
           process.exit(1);
+        }
+
+        // Block local rebuilds on CI-refreshed wikis unless --allow-local-refresh
+        // was passed. See src/config/refresh-policy.ts for the rule.
+        const guard = checkRefreshPolicy(config, "ingest", {
+          allowLocalRefresh: options.allowLocalRefresh === true,
+        });
+        if (!guard.allowed) {
+          spinner.fail(chalk.yellow("Ingest blocked"));
+          console.error();
+          console.error(chalk.yellow(`  ${guard.reason}`));
+          console.error();
+          process.exit(1);
+        }
+
+        // Cost-warning prompt when bypassing the CI guardrail. Reads the
+        // last refresh entry from the journal so the user knows how
+        // current the wiki is and what the last run cost.
+        if (config?.refreshed_by === "ci" && options.allowLocalRefresh === true) {
+          spinner.stop();
+          const ok = await confirmForcedRefresh(ctxDir, {
+            skipPrompt: options.yes === true,
+          });
+          if (!ok) {
+            console.log(chalk.dim("  Cancelled."));
+            return;
+          }
+          spinner.start("Loading configuration...");
         }
 
         // Build connectors from config
@@ -460,6 +506,25 @@ export function registerIngestCommand(program: Command): void {
           return;
         }
 
+        // --- Hard budget enforcement ---
+        // If costs.budget is set, the estimated cost of THIS run plus
+        // month-to-date spend must not exceed it. Prints a warning at
+        // the alert threshold and throws at 100%. Escape hatch:
+        // CTX_IGNORE_BUDGET=1 ctx ingest.
+        try {
+          assertWithinBudget(ctxDir, config, cost.total, "ctx ingest");
+        } catch (err) {
+          if (err instanceof BudgetExceededError) {
+            console.error(chalk.red(err.message));
+            process.exit(78); // EX_CONFIG — config/policy prevents the action
+          }
+          throw err;
+        }
+        const budgetWarning = checkBudgetWarning(ctxDir, config, cost.total);
+        if (budgetWarning) {
+          console.error(chalk.yellow(`  ${budgetWarning}`));
+        }
+
         // --- Cost confirmation (non-dry-run) ---
         if (!options.yes) {
           const proceed = await confirm(
@@ -525,6 +590,36 @@ export function registerIngestCommand(program: Command): void {
             (p) => !updated.includes(p) && !created.includes(p)
           );
 
+          // ── Runbook auto-detection ────────────────────────────
+          // Deterministic scan of package.json, Makefile, Dockerfile,
+          // compose, .env.example, CI workflows, README. Writes a
+          // single runbook.md with the "how do I actually run this
+          // thing" answer. ~10ms, zero LLM cost. Runs AFTER the LLM
+          // compile so it never gets clobbered by a hallucinated run
+          // command.
+          try {
+            const runbookData = detectRunbook(projectRoot);
+            if (hasRunbookContent(runbookData)) {
+              // Freshness-stamped render — lets `ctx status` detect
+              // drift between the page and its source files via git.
+              const runbookMd = renderRunbookPageWithFreshness(
+                runbookData,
+                config.project,
+                projectRoot
+              );
+              const existed = existingSet.has("runbook.md");
+              pageManager.write("runbook.md", runbookMd);
+              if (existed) {
+                if (!updated.includes("runbook.md")) updated.push("runbook.md");
+              } else {
+                if (!created.includes("runbook.md")) created.push("runbook.md");
+              }
+            }
+          } catch {
+            // Runbook detection is best-effort — a malformed repo
+            // signal file must never break an ingest run.
+          }
+
           compileSpinner.succeed(
             `Compiled ${chalk.bold(String(compiledPages.length))} wiki pages`
           );
@@ -555,7 +650,7 @@ export function registerIngestCommand(program: Command): void {
           if (response.tokensUsed) {
             const totalTokens = response.tokensUsed.input + response.tokensUsed.output;
             const actualCost = estimateCost(response.tokensUsed.input, model);
-            const outputPricing = MODEL_PRICING[model] ?? MODEL_PRICING["claude-sonnet-4"];
+            const outputPricing = resolvePricing(model) ?? resolvePricing("claude-sonnet-4")!;
             const actualOutputCost = (response.tokensUsed.output / 1_000_000) * outputPricing.output;
             const actualTotalCost = actualCost.input + actualOutputCost;
             console.error(
@@ -565,7 +660,7 @@ export function registerIngestCommand(program: Command): void {
             // Show cache savings when we got a cache hit
             const cacheRead = response.tokensUsed.cacheRead ?? 0;
             if (cacheRead > 0) {
-              const inputPricing = MODEL_PRICING[model] ?? MODEL_PRICING["claude-sonnet-4"];
+              const inputPricing = resolvePricing(model) ?? resolvePricing("claude-sonnet-4")!;
               // Cached reads cost 10% of normal input, so savings = 90% of normal input cost
               const savedUsd = (cacheRead / 1_000_000) * inputPricing.input * 0.9;
               console.error(

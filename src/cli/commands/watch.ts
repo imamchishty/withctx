@@ -1,13 +1,13 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import { watch as fsWatch, existsSync, statSync } from "node:fs";
-import { resolve } from "node:path";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
 import { createLLMFromCtxConfig } from "../../llm/index.js";
 import { ConnectorRegistry } from "../../connectors/registry.js";
 import { LocalFilesConnector } from "../../connectors/local-files.js";
+import { safeResolve } from "../../security/paths.js";
 import type { RawDocument } from "../../types/source.js";
 
 interface WatchOptions {
@@ -180,9 +180,8 @@ export function registerWatchCommand(program: Command): void {
 
           const interval = setInterval(async () => {
             for (const source of localSources) {
-              const resolvedPath = source.path.startsWith(".")
-                ? resolve(projectRoot, source.path)
-                : source.path;
+              const resolvedPath = safeResolve(source.path, projectRoot);
+              if (resolvedPath === null) continue;
               await syncSource(source.name, resolvedPath, config, ctxDir);
             }
           }, pollingInterval * 1000);
@@ -207,9 +206,15 @@ export function registerWatchCommand(program: Command): void {
           const watchers: ReturnType<typeof fsWatch>[] = [];
 
           for (const source of localSources) {
-            const resolvedPath = source.path.startsWith(".")
-              ? resolve(projectRoot, source.path)
-              : source.path;
+            const resolvedPath = safeResolve(source.path, projectRoot);
+            if (resolvedPath === null) {
+              console.log(
+                chalk.yellow(
+                  `  Skipping ${source.name} — path "${source.path}" escapes the project root`
+                )
+              );
+              continue;
+            }
 
             if (!existsSync(resolvedPath)) {
               console.log(chalk.yellow(`  Skipping ${source.name} — path does not exist: ${resolvedPath}`));

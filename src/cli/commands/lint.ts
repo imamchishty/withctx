@@ -5,13 +5,28 @@ import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
 import { createLLMFromCtxConfig } from "../../llm/index.js";
+import { readBlessState, hasDriftedSinceBless } from "../../wiki/bless.js";
 import type { LintIssue, LintReport } from "../../types/page.js";
 
 interface LintOptions {
   fix?: boolean;
+  skipBless?: boolean;
 }
 
-function runLocalLintRules(pageManager: PageManager): LintIssue[] {
+/**
+ * Local lint rules — everything that doesn't need an LLM. Given a
+ * PageManager and a project root (for git-aware bless-drift detection),
+ * returns the flat issue list.
+ *
+ * projectRoot is optional so tests that only exercise the content rules
+ * can keep passing the simple signature. When omitted, bless rules
+ * still run but drift detection degrades gracefully to "no drift"
+ * because there's no git working directory to diff against.
+ */
+function runLocalLintRules(
+  pageManager: PageManager,
+  projectRoot?: string
+): LintIssue[] {
   const issues: LintIssue[] = [];
   const allPages = pageManager.list();
   const pageSet = new Set(allPages);
@@ -82,6 +97,27 @@ function runLocalLintRules(pageManager: PageManager): LintIssue[] {
         suggestion: "Add a _Source: ..._ line to track provenance",
       });
     }
+
+    // Check: bless drift — a page was blessed at an old git sha and
+    // the repo has since moved on. This doesn't necessarily mean the
+    // page is wrong; it means the last human review is no longer
+    // pinned to the current tree state and a re-bless is warranted.
+    const raw = pageManager.readRaw(pagePath);
+    if (raw) {
+      const state = readBlessState(raw);
+      if (state.status === "blessed") {
+        if (hasDriftedSinceBless(state, { cwd: projectRoot })) {
+          const sinceSha = state.stamp.blessed_at_sha ?? "unknown";
+          issues.push({
+            type: "bless-drift",
+            severity: "warning",
+            page: pagePath,
+            message: `Blessed at ${sinceSha} — tree has moved since then`,
+            suggestion: "Review the page and re-run `ctx approve` to confirm it's still accurate",
+          });
+        }
+      }
+    }
   }
 
   // Check: index completeness
@@ -129,7 +165,7 @@ export function registerLintCommand(program: Command): void {
         }
 
         // Run local lint rules
-        const localIssues = runLocalLintRules(pageManager);
+        const localIssues = runLocalLintRules(pageManager, projectRoot);
 
         // Run Claude-powered contradiction detection
         spinner.text = "Checking for contradictions with Claude...";
@@ -201,6 +237,7 @@ Only report clear contradictions, not minor differences in wording.`;
             stale: allIssues.filter((i) => i.type === "stale").length,
             orphans: allIssues.filter((i) => i.type === "orphan").length,
             missing: allIssues.filter((i) => i.type === "missing").length,
+            blessDrift: allIssues.filter((i) => i.type === "bless-drift").length,
           },
         };
 
@@ -254,6 +291,7 @@ Only report clear contradictions, not minor differences in wording.`;
         console.log(`    Stale pages:    ${report.summary.stale}`);
         console.log(`    Orphan refs:    ${report.summary.orphans}`);
         console.log(`    Missing info:   ${report.summary.missing}`);
+        console.log(`    Bless drift:    ${report.summary.blessDrift}`);
         console.log();
 
         // Auto-fix if requested

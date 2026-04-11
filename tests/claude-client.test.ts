@@ -17,12 +17,45 @@ const mockResponse = {
   },
 };
 
+// Deltas fed to the mock stream; individual tests can override.
+let mockStreamDeltas: string[] = ['hello ', 'from ', 'stream'];
+const capturedStreamRequests: Array<Record<string, unknown>> = [];
+
 vi.mock('@anthropic-ai/sdk', () => {
   class MockAnthropic {
     public messages = {
       create: vi.fn(async (body: Record<string, unknown>) => {
         capturedRequests.push(body);
         return mockResponse;
+      }),
+      stream: vi.fn((body: Record<string, unknown>) => {
+        capturedStreamRequests.push(body);
+        const deltas = [...mockStreamDeltas];
+        const joined = deltas.join('');
+        // Return an object matching the shape we rely on:
+        //   - async iterable yielding content_block_delta events
+        //   - finalMessage(): Promise resolving to the same shape as
+        //     messages.create's response
+        return {
+          [Symbol.asyncIterator]: async function* () {
+            for (const text of deltas) {
+              yield {
+                type: 'content_block_delta',
+                delta: { type: 'text_delta', text },
+              };
+            }
+          },
+          finalMessage: async () => ({
+            content: [{ type: 'text', text: joined }],
+            model: 'claude-sonnet-4-20250514',
+            usage: {
+              input_tokens: 123,
+              output_tokens: 45,
+              cache_read_input_tokens: 0,
+              cache_creation_input_tokens: 0,
+            },
+          }),
+        };
       }),
     };
   }
@@ -34,6 +67,8 @@ const { ClaudeClient } = await import('../src/claude/client.js');
 
 beforeEach(() => {
   capturedRequests.length = 0;
+  capturedStreamRequests.length = 0;
+  mockStreamDeltas = ['hello ', 'from ', 'stream'];
   mockResponse.usage = {
     input_tokens: 100,
     output_tokens: 50,
@@ -156,6 +191,56 @@ describe('ClaudeClient — configurable base URL', () => {
     const client = new ClaudeClient();
     expect(client.getBaseURL()).toBe('https://env-gateway.example.com');
     delete process.env.ANTHROPIC_BASE_URL;
+  });
+});
+
+describe('ClaudeClient.promptStream', () => {
+  it('yields text deltas in order as an async iterable', async () => {
+    mockStreamDeltas = ['Hel', 'lo, ', 'world!'];
+    const client = new ClaudeClient();
+    const handle = client.promptStream('anything');
+
+    const received: string[] = [];
+    for await (const chunk of handle.textStream) {
+      received.push(chunk);
+    }
+
+    expect(received).toEqual(['Hel', 'lo, ', 'world!']);
+    // The request body was still forwarded to messages.stream
+    expect(capturedStreamRequests).toHaveLength(1);
+    const body = capturedStreamRequests[0];
+    expect(body.messages).toEqual([{ role: 'user', content: 'anything' }]);
+  });
+
+  it('resolves finalResponse with accumulated content + usage', async () => {
+    mockStreamDeltas = ['part one ', 'part two'];
+    const client = new ClaudeClient();
+    const handle = client.promptStream('prompt');
+
+    // Drain the stream first.
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    for await (const _ of handle.textStream) {
+      // just drain
+    }
+
+    const final = await handle.finalResponse;
+    expect(final.content).toBe('part one part two');
+    expect(final.tokensUsed).toBeDefined();
+    expect(final.tokensUsed!.input).toBe(123);
+    expect(final.tokensUsed!.output).toBe(45);
+  });
+
+  it('forwards systemPrompt and maxTokens to the stream call', async () => {
+    const client = new ClaudeClient();
+    client.promptStream('q', {
+      systemPrompt: 'You are X.',
+      maxTokens: 2048,
+    });
+
+    expect(capturedStreamRequests).toHaveLength(1);
+    const body = capturedStreamRequests[0];
+    expect(body.system).toBe('You are X.');
+    expect(body.max_tokens).toBe(2048);
   });
 });
 

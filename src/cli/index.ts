@@ -47,6 +47,14 @@ import { registerGoCommand } from "./commands/go.js";
 import { registerGlossaryCommand } from "./commands/glossary.js";
 import { registerWhoCommand } from "./commands/who.js";
 import { registerTodosCommand } from "./commands/todos.js";
+import { registerPublishCommand } from "./commands/publish.js";
+import { registerHistoryCommand } from "./commands/history.js";
+import { registerCompletionCommand } from "./commands/completion.js";
+import { registerApproveCommand } from "./commands/approve.js";
+import { registerWhyCommand } from "./commands/why.js";
+import { registerVerifyCommand } from "./commands/verify.js";
+import { registerTeachCommand } from "./commands/teach.js";
+import { applyAskRewrite } from "./ask-dispatcher.js";
 
 // Global verbosity state — commands can import and check this
 export const globalState = {
@@ -61,85 +69,109 @@ const pkgPath = join(__dirname, "..", "..", "package.json");
 const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"));
 
 // ---------------------------------------------------------------------------
-// Smart grouped help — replaces Commander's wall-of-text default
+// 12 canonical verbs — everything else is a hidden alias
 // ---------------------------------------------------------------------------
+//
+// withctx has accumulated a lot of verbs over the years. Most are aliases
+// of one of these twelve. Every command that doesn't appear below is still
+// registered and still runs — they just don't show up in `ctx help` or
+// `ctx help --all`, so new users aren't buried.
+//
+//   1.  setup    — bootstrap a project                 (aliases: init, go, reset)
+//   2.  doctor   — diagnose environment
+//   3.  sync     — refresh the wiki                    (aliases: ingest, watch)
+//   4.  ask      — ask the wiki anything               (aliases: query, chat, search, grep, who, why, explain, faq, onboard)
+//   5.  status   — wiki health dashboard               (absorbs: metrics, costs, history, todos, impact, timeline, changelog, diff)
+//   6.  lint     — consistency + safety checks
+//   7.  approve  — sign off on a page                  (alias: bless)
+//   8.  verify   — check assertions against the tree
+//   9.  review   — drift check / PR review
+//   10. teach    — quiz on wiki content
+//   11. pack     — emit bundles for agents / CI        (absorbs: export, publish, embed, snapshot, serve, mcp)
+//   12. config   — view / edit configuration           (absorbs: sources, repos)
+//
+// Two help surfaces:
+//
+//   `ctx help`        → the CORE 12, one screen.
+//   `ctx help --all`  → the 12 again, grouped by purpose, with a one-line
+//                       note about which old verbs are now flags or aliases.
 
-const GROUPED_HELP: Array<{ heading: string; commands: Array<[string, string]> }> = [
+const CORE_HELP: Array<{ heading: string; commands: Array<[string, string]> }> = [
   {
-    heading: "Getting Started",
+    heading: "Start",
     commands: [
-      ["ctx setup", "Detect sources, write ctx.yaml, compile the wiki (aliases: init, go)"],
-      ["ctx add <source>", "Add a source (github, jira, confluence, slack, notion, local)"],
-      ["ctx todos", "Scan code for TODO/FIXME markers"],
+      ["ctx setup", "Detect sources, write ctx.yaml, compile the wiki"],
+      ["ctx doctor", "Diagnose setup, credentials and dependencies"],
+      ["ctx config", "View or edit configuration (sources, repos, keys)"],
     ],
   },
   {
-    heading: "Daily Use",
+    heading: "Use",
     commands: [
-      ["ctx sync", "Re-sync sources and update wiki"],
-      ["ctx query <question>", "Ask a question about your project"],
-      ["ctx chat", "Interactive chat with your wiki"],
-      ["ctx search <term>", "Search across all wiki pages"],
+      ["ctx sync", "Refresh the wiki from sources (incremental)"],
+      ["ctx ask \"...\"", "Ask the wiki anything (--chat / --search / --who)"],
       ["ctx status", "Wiki health dashboard"],
+      ["ctx lint", "Check the wiki for contradictions, drift, secrets"],
     ],
   },
   {
-    heading: "For New Team Members",
+    heading: "Trust",
     commands: [
-      ["ctx onboard", "Generate a personalised onboarding guide"],
-      ["ctx glossary", "Auto-generate project glossary"],
-      ["ctx who [area]", "Show who owns what"],
-      ["ctx faq", "Auto-generate FAQ from project knowledge"],
+      ["ctx approve <page>", "Sign off on a page (human review)"],
+      ["ctx verify [page]", "Check the page's claims against the live tree"],
+      ["ctx review <pr>", "Drift check a PR against approved pages"],
+      ["ctx teach [page]", "Drill yourself on the wiki's content"],
     ],
   },
   {
-    heading: "Code Intelligence",
+    heading: "Ship",
     commands: [
-      ["ctx review [pr]", "AI-powered code review"],
-      ["ctx explain <file>", "Explain any file or function"],
-      ["ctx impact <file>", "Analyse blast radius of changes"],
-      ["ctx diff", "Show what changed since last sync"],
-      ["ctx graph", "Visualise dependency graph"],
-      ["ctx metrics", "Project health metrics"],
-    ],
-  },
-  {
-    heading: "Exports & Integration",
-    commands: [
-      ["ctx export", "Export wiki in various formats"],
-      ["ctx pack", "Pack context for AI agents"],
-      ["ctx mcp", "Start MCP server for AI tools"],
-      ["ctx embed", "Generate vector embeddings"],
-      ["ctx import", "Import external docs into the wiki"],
-      ["ctx serve", "Start a local web server for the wiki"],
-    ],
-  },
-  {
-    heading: "Admin",
-    commands: [
-      ["ctx config", "View/edit configuration"],
-      ["ctx costs", "Show API usage and costs"],
-      ["ctx doctor", "Diagnose setup issues"],
-      ["ctx reset", "Reset wiki and re-compile"],
-      ["ctx sources", "List configured sources"],
-      ["ctx repos", "List configured repositories"],
-      ["ctx lint", "Lint wiki pages for quality"],
-      ["ctx watch", "Watch for file changes and auto-sync"],
-      ["ctx changelog", "Generate changelog from git history"],
-      ["ctx timeline", "Show project activity timeline"],
-      ["ctx ingest", "Ingest sources into wiki (low-level)"],
+      ["ctx pack", "Pack the wiki for agents (--format, --mcp, --serve)"],
+      ["ctx help --all", "Show the 12 verbs grouped by purpose"],
     ],
   },
 ];
 
-function printGroupedHelp(): void {
-  const COL_WIDTH = 26;
+const GROUPED_HELP: Array<{ heading: string; commands: Array<[string, string]> }> = [
+  {
+    heading: "Getting started",
+    commands: [
+      ["ctx setup", "Detect sources, write ctx.yaml, compile the wiki"],
+      ["ctx doctor", "Diagnose setup, credentials and dependencies"],
+      ["ctx config", "View / edit configuration (absorbs sources, repos)"],
+    ],
+  },
+  {
+    heading: "Daily use",
+    commands: [
+      ["ctx sync", "Refresh from sources (--full, --watch, --note)"],
+      ["ctx ask \"...\"", "Query the wiki (--chat, --search, --grep, --who, --why)"],
+      ["ctx status", "Wiki health dashboard (--json, --todos, --impact, --metrics)"],
+      ["ctx lint", "Consistency / safety checks (--fix, --verify, --redaction)"],
+    ],
+  },
+  {
+    heading: "Trust pipeline",
+    commands: [
+      ["ctx approve <page>", "Human review stamp (tier: manual → asserted)"],
+      ["ctx verify [page]", "Assertion engine (tier: asserted → verified)"],
+      ["ctx review <pr>", "Drift check a PR (--drift is zero-cost, CI-safe)"],
+      ["ctx teach [page]", "LLM-free flashcard quiz on wiki content"],
+    ],
+  },
+  {
+    heading: "Ship to agents",
+    commands: [
+      ["ctx pack", "Emit CLAUDE.md / system-prompt / RAG JSONL / HTML / MCP"],
+    ],
+  },
+];
 
-  console.log();
-  console.log(chalk.bold(`withctx v${pkg.version}`) + chalk.dim(" — AI-compiled project wiki"));
-  console.log();
-
-  for (const group of GROUPED_HELP) {
+function renderHelpGroups(
+  groups: Array<{ heading: string; commands: Array<[string, string]> }>
+): void {
+  const COL_WIDTH = 24;
+  for (const group of groups) {
     console.log(chalk.bold.underline(`  ${group.heading}`));
     for (const [cmd, desc] of group.commands) {
       const padding = Math.max(2, COL_WIDTH - cmd.length);
@@ -147,10 +179,47 @@ function printGroupedHelp(): void {
     }
     console.log();
   }
+}
 
+/**
+ * Print the compact core help — 12 commands, one screen, no overwhelm.
+ * Shown by `ctx help` with no flags, and by `ctx <no-args>` for first-time users.
+ */
+function printCoreHelp(): void {
+  console.log();
+  console.log(chalk.bold(`withctx v${pkg.version}`) + chalk.dim(" — AI-compiled project wiki"));
+  console.log();
+  renderHelpGroups(CORE_HELP);
   console.log(chalk.dim(`  Run 'ctx <command> --help' for detailed usage.`));
+  console.log(chalk.dim(`  Run 'ctx help --all' to see the 12 verbs grouped by purpose.`));
   console.log(chalk.dim(`  Docs: https://github.com/imamchishty/withctx`));
   console.log();
+}
+
+/**
+ * Print the full grouped help — every registered command. Behind
+ * `--all` so it doesn't ambush new users.
+ */
+function printFullHelp(): void {
+  console.log();
+  console.log(
+    chalk.bold(`withctx v${pkg.version}`) +
+      chalk.dim(" — every command, grouped by purpose")
+  );
+  console.log();
+  renderHelpGroups(GROUPED_HELP);
+  console.log(chalk.dim(`  Run 'ctx <command> --help' for detailed usage.`));
+  console.log(chalk.dim(`  Run 'ctx help' for the short list.`));
+  console.log(chalk.dim(`  Docs: https://github.com/imamchishty/withctx`));
+  console.log();
+}
+
+/**
+ * Legacy entry point kept for back-compat with any internal callers.
+ * Prefer `printCoreHelp` / `printFullHelp`.
+ */
+function printGroupedHelp(): void {
+  printCoreHelp();
 }
 
 // ---------------------------------------------------------------------------
@@ -178,7 +247,7 @@ program.configureHelp({
   formatHelp: () => "",            // suppress Commander's default help text
 });
 program.addHelpText("beforeAll", () => {
-  printGroupedHelp();
+  printCoreHelp();
   return "";
 });
 
@@ -187,12 +256,18 @@ program.action(() => {
   printSmartDefault();
 });
 
-// Explicit `ctx help` subcommand — always shows the full grouped help
+// `ctx help` → compact core set.
+// `ctx help --all` → full grouped list of every command.
 program
   .command("help")
-  .description("Show all commands grouped by purpose")
-  .action(() => {
-    printGroupedHelp();
+  .description("Show the core commands. Use --all for the full list.")
+  .option("--all", "Show every command, grouped by purpose")
+  .action((opts: { all?: boolean }) => {
+    if (opts.all) {
+      printFullHelp();
+    } else {
+      printCoreHelp();
+    }
   });
 
 // ---------------------------------------------------------------------------
@@ -318,7 +393,7 @@ function printSmartDefault(): void {
     console.log("  Get started:");
     console.log();
     console.log(`    ${chalk.cyan("ctx setup")}           ${chalk.dim("Detect sources, write ctx.yaml, compile the wiki")}`);
-    console.log(chalk.dim(`                        (ctx init and ctx go are aliases)`));
+    console.log(`    ${chalk.cyan("ctx doctor")}          ${chalk.dim("Check Node version, API keys, dependencies")}`);
     console.log();
     console.log(`  ${chalk.dim("Learn more:")}  ${chalk.cyan("ctx help")}`);
     console.log(`  ${chalk.dim("Docs:")}        ${chalk.dim("https://github.com/imamchishty/withctx")}`);
@@ -354,11 +429,11 @@ function printSmartDefault(): void {
   console.log();
   console.log("  What now?");
   console.log();
-  console.log(`    ${chalk.cyan('ctx query "..."')}    ${chalk.dim("Ask a question")}`);
+  console.log(`    ${chalk.cyan('ctx ask "..."')}      ${chalk.dim("Ask the wiki a question")}`);
   console.log(`    ${chalk.cyan("ctx status")}         ${chalk.dim("Full dashboard")}`);
   console.log(`    ${chalk.cyan("ctx sync")}           ${chalk.dim("Refresh from sources")}`);
-  console.log(`    ${chalk.cyan("ctx onboard")}        ${chalk.dim("Personalised onboarding guide")}`);
-  console.log(`    ${chalk.cyan("ctx help")}           ${chalk.dim("All commands")}`);
+  console.log(`    ${chalk.cyan("ctx teach")}          ${chalk.dim("Drill yourself on the wiki")}`);
+  console.log(`    ${chalk.cyan("ctx help")}           ${chalk.dim("All 12 verbs")}`);
   console.log();
 }
 
@@ -366,6 +441,7 @@ function printSmartDefault(): void {
 // `ctx setup` (with `init` and `go` as aliases) is registered by
 // registerGoCommand — the three names all hit the same action.
 registerGoCommand(program);
+registerPublishCommand(program);
 registerIngestCommand(program);
 registerSyncCommand(program);
 registerAddCommand(program);
@@ -400,5 +476,54 @@ registerSearchCommand(program);
 registerGlossaryCommand(program);
 registerWhoCommand(program);
 registerTodosCommand(program);
+registerHistoryCommand(program);
+registerCompletionCommand(program);
+registerApproveCommand(program);
+registerWhyCommand(program);
+registerVerifyCommand(program);
+registerTeachCommand(program);
 
-program.parse(process.argv);
+// ── Global error handling ────────────────────────────────────────────
+//
+// Every CtxError thrown from a command lands here. We render it using
+// the standard "Error (CODE): ... To fix: ..." block so users never
+// see a raw stack trace for a recoverable problem. Non-CtxErrors
+// fall through to Commander's default behaviour (stderr + exit 1).
+//
+// IMPORTANT: rejectionHandler has to live here, BEFORE program.parse(),
+// because Commander wraps async actions in promises that reject on
+// throw, and without this handler Node prints the default
+// "UnhandledPromiseRejection" warning before our nice error block.
+// Renders a CtxError + exits with the right sysexits code. Shared by
+// the sync and async handlers so both code paths produce identical
+// output for a given error.
+async function renderErrorAndExit(reason: unknown): Promise<never> {
+  const { isCtxError, formatCtxError, EXIT_CODES } = await import("../errors.js");
+  if (isCtxError(reason)) {
+    const colour = process.stderr.isTTY === true;
+    process.stderr.write(formatCtxError(reason, { colour }) + "\n");
+    process.exit(EXIT_CODES[reason.code] ?? 1);
+  }
+  // Non-CtxError: preserve the stack so crashes remain debuggable,
+  // but prefix so users know it came from withctx.
+  const msg = reason instanceof Error ? reason.stack ?? reason.message : String(reason);
+  process.stderr.write(`withctx crashed: ${msg}\n`);
+  process.exit(1);
+}
+
+process.on("unhandledRejection", (reason) => {
+  void renderErrorAndExit(reason);
+});
+process.on("uncaughtException", (reason) => {
+  void renderErrorAndExit(reason);
+});
+
+// Rewrite `ctx ask ...` to the appropriate legacy verb before
+// Commander parses argv. A no-op for every other invocation.
+applyAskRewrite(process.argv);
+
+try {
+  program.parse(process.argv);
+} catch (err) {
+  void renderErrorAndExit(err);
+}

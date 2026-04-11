@@ -42,6 +42,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:bdd": "cucumber-js",
+    "test:smoke": "bash scripts/smoke-trust-pipeline.sh",
     "lint": "eslint src/",
     "clean": "rm -rf dist/",
     "prepublishOnly": "npm run clean && npm run build",

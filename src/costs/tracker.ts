@@ -1,4 +1,5 @@
 import type { CtxDirectory } from "../storage/ctx-dir.js";
+import { resolvePricing } from "../usage/recorder.js";
 
 export type OperationType =
   | "ingest"
@@ -39,15 +40,6 @@ export interface CostData {
   budget?: number;
   alertAt?: number; // percentage (0-100)
 }
-
-/**
- * Model pricing in dollars per million tokens.
- */
-const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  "claude-sonnet-4": { input: 3.0, output: 15.0 },
-  "claude-opus-4": { input: 15.0, output: 75.0 },
-  "claude-haiku-3.5": { input: 0.8, output: 4.0 },
-};
 
 /**
  * Tracks token usage and costs per operation.
@@ -207,9 +199,14 @@ export class CostTracker {
 
 /**
  * Calculate cost in dollars for a given model and token usage.
+ *
+ * Pricing source-of-truth is `src/usage/recorder.ts` — it merges the
+ * built-in table with any user-declared `ai.pricing` from ctx.yaml, so a
+ * Core42 / Azure OpenAI / private-model user gets accurate numbers here
+ * without any code changes.
  */
 function calculateCost(model: string, usage: TokenUsage): number {
-  const pricing = MODEL_PRICING[model] ?? MODEL_PRICING["claude-sonnet-4"];
+  const pricing = resolvePricing(model) ?? resolvePricing("claude-sonnet-4")!;
   const inputCost = (usage.inputTokens / 1_000_000) * pricing.input;
   const outputCost = (usage.outputTokens / 1_000_000) * pricing.output;
   return inputCost + outputCost;

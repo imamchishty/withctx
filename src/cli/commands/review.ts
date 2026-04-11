@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import ora from "ora";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { readFileSync, existsSync, writeFileSync } from "node:fs";
 import { resolve, relative } from "node:path";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
@@ -10,6 +10,8 @@ import { PageManager } from "../../wiki/pages.js";
 import { createLLMFromCtxConfig } from "../../llm/index.js";
 import { CostTracker } from "../../costs/tracker.js";
 import { recordCall } from "../../usage/recorder.js";
+import { findAffectedPages, type AffectedPage } from "../../wiki/drift.js";
+import type { WikiPage } from "../../types/page.js";
 
 type Severity = "strict" | "normal" | "lenient";
 type Focus = "security" | "performance" | "patterns" | "all";
@@ -20,6 +22,15 @@ interface ReviewOptions {
   focus?: Focus;
   output?: string;
   maxTokens?: string;
+  /**
+   * Skip the LLM pass entirely and just list wiki pages whose bless
+   * or refresh state is invalidated by the diff. LLM-free, $0, and
+   * fast enough to run as a pre-commit hook. Fails the process with
+   * exit 1 when at least one blessed page is flagged, so CI pipelines
+   * can gate merges on "every drifted page must be re-blessed".
+   */
+  drift?: boolean;
+  json?: boolean;
 }
 
 /**
@@ -30,7 +41,7 @@ function resolveDiff(input: string | undefined, options: ReviewOptions): { diff:
   // --staged: review staged git changes
   if (options.staged) {
     try {
-      const diff = execSync("git diff --staged", { encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
+      const diff = execFileSync("git", ["diff", "--staged"], { encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 });
       if (!diff.trim()) {
         throw new Error("No staged changes found. Stage changes with 'git add' first.");
       }
@@ -47,33 +58,57 @@ function resolveDiff(input: string | undefined, options: ReviewOptions): { diff:
 
   // GitHub PR URL
   if (input.startsWith("https://github.com/") && input.includes("/pull/")) {
+    // Parse the URL up front so the downstream calls only ever see
+    // values that matched a strict regex. This protects both branches
+    // (gh CLI and the curl fallback) from any attempt to smuggle shell
+    // metacharacters or command-line flags through the URL argument.
+    const prMatch = input.match(
+      /^https:\/\/github\.com\/([A-Za-z0-9._-]+)\/([A-Za-z0-9._-]+)\/pull\/(\d+)(?:[/?#].*)?$/,
+    );
+    if (!prMatch) {
+      throw new Error(
+        `Invalid GitHub PR URL: ${input}. Expected https://github.com/<owner>/<repo>/pull/<number>.`,
+      );
+    }
+    const [, owner, repo, prNumber] = prMatch;
+    const canonicalUrl = `https://github.com/${owner}/${repo}/pull/${prNumber}`;
+
     try {
-      // Try gh CLI first
-      const diff = execSync(`gh pr diff ${input}`, {
+      // Try gh CLI first — argv form so no shell involvement.
+      const diff = execFileSync("gh", ["pr", "diff", canonicalUrl], {
         encoding: "utf-8",
         maxBuffer: 10 * 1024 * 1024,
       });
-      return { diff, source: input };
+      return { diff, source: canonicalUrl };
     } catch {
-      // Fallback: try GitHub API with token
+      // Fallback: GitHub REST API via curl. Using argv form means the
+      // token (which may legitimately contain `$`, `"` or other shell
+      // metacharacters after rotation) is passed literally and cannot
+      // be interpreted by a shell.
       const token = process.env.GITHUB_TOKEN;
       if (token) {
-        const match = input.match(/github\.com\/([^/]+)\/([^/]+)\/pull\/(\d+)/);
-        if (match) {
-          const [, owner, repo, prNumber] = match;
-          try {
-            const diff = execSync(
-              `curl -sH "Authorization: token ${token}" -H "Accept: application/vnd.github.v3.diff" https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`,
-              { encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 }
-            );
-            return { diff, source: input };
-          } catch {
-            throw new Error(`Failed to fetch PR diff from GitHub API for ${input}`);
-          }
+        try {
+          const diff = execFileSync(
+            "curl",
+            [
+              "-s",
+              "-H",
+              `Authorization: token ${token}`,
+              "-H",
+              "Accept: application/vnd.github.v3.diff",
+              `https://api.github.com/repos/${owner}/${repo}/pulls/${prNumber}`,
+            ],
+            { encoding: "utf-8", maxBuffer: 10 * 1024 * 1024 },
+          );
+          return { diff, source: canonicalUrl };
+        } catch {
+          throw new Error(
+            `Failed to fetch PR diff from GitHub API for ${canonicalUrl}`,
+          );
         }
       }
       throw new Error(
-        `Failed to fetch PR diff. Ensure 'gh' CLI is installed and authenticated, or set GITHUB_TOKEN.`
+        `Failed to fetch PR diff. Ensure 'gh' CLI is installed and authenticated, or set GITHUB_TOKEN.`,
       );
     }
   }
@@ -220,6 +255,11 @@ export function registerReviewCommand(program: Command): void {
     )
     .option("--output <file>", "Write review to a file")
     .option("--max-tokens <n>", "Max tokens for response")
+    .option(
+      "--drift",
+      "Skip LLM review; list wiki pages invalidated by the diff (no API cost)"
+    )
+    .option("--json", "Emit the report as JSON (only meaningful with --drift)")
     .action(async (input: string | undefined, options: ReviewOptions) => {
       const spinner = ora("Resolving diff...").start();
 
@@ -246,6 +286,38 @@ export function registerReviewCommand(program: Command): void {
         }
 
         const pageManager = new PageManager(ctxDir);
+
+        // ── Drift-only fast path ─────────────────────────────────
+        //
+        // When `--drift` is set we deliberately skip every LLM-touching
+        // code path below. This is the cheap, deterministic, CI-safe
+        // review mode: list the wiki pages this diff invalidates, exit
+        // non-zero if any of them were blessed, done.
+        if (options.drift) {
+          spinner.stop();
+          const allPaths = pageManager.list();
+          const wikiSet: WikiPage[] = [];
+          for (const p of allPaths) {
+            const page = pageManager.read(p);
+            if (page) wikiSet.push(page);
+          }
+          const affected = findAffectedPages(changedFiles, wikiSet);
+
+          if (options.json) {
+            console.log(JSON.stringify(buildDriftJson(source, changedFiles, affected), null, 2));
+          } else {
+            renderDriftReport(source, changedFiles, affected);
+          }
+
+          // Exit non-zero when any blessed page drifted — that's the
+          // signal CI should block on.
+          const blockedCount = affected.filter((a) => a.classification === "drifted").length;
+          if (blockedCount > 0) {
+            process.exit(1);
+          }
+          return;
+        }
+
         const wikiPages = loadRelevantWikiPages(pageManager, changedFiles);
 
         spinner.text = `Loaded ${wikiPages.length} wiki page(s). Sending to Claude for review...`;
@@ -362,6 +434,164 @@ ${diff}
         process.exit(1);
       }
     });
+}
+
+// ── Drift rendering ──────────────────────────────────────────────────
+//
+// `ctx review --drift` and `ctx review --drift --json` share the same
+// data model; the renderers here are the only things that differ.
+// Keeping them adjacent to the command handler (rather than extracted
+// to a separate file) makes the "what does --drift print?" question
+// answerable by scrolling through one file.
+
+interface DriftJsonReport {
+  source: string;
+  changedFiles: string[];
+  summary: {
+    total: number;
+    drifted: number;
+    stale: number;
+    unblessed: number;
+  };
+  affected: Array<{
+    page: string;
+    title: string;
+    classification: string;
+    blessed_by?: string;
+    blessed_at?: string;
+    blessed_at_sha?: string;
+    reasons: Array<{
+      changedFile: string;
+      kind: string;
+      line: number;
+      excerpt: string;
+    }>;
+  }>;
+}
+
+function buildDriftJson(
+  source: string,
+  changedFiles: string[],
+  affected: AffectedPage[]
+): DriftJsonReport {
+  return {
+    source,
+    changedFiles,
+    summary: {
+      total: affected.length,
+      drifted: affected.filter((a) => a.classification === "drifted").length,
+      stale: affected.filter((a) => a.classification === "stale").length,
+      unblessed: affected.filter((a) => a.classification === "unblessed").length,
+    },
+    affected: affected.map((a) => ({
+      page: a.page.path,
+      title: a.page.title,
+      classification: a.classification,
+      ...(a.bless.status === "blessed" && {
+        blessed_by: a.bless.stamp.blessed_by,
+        blessed_at: a.bless.stamp.blessed_at,
+        ...(a.bless.stamp.blessed_at_sha && { blessed_at_sha: a.bless.stamp.blessed_at_sha }),
+      }),
+      reasons: a.reasons.map((r) => ({
+        changedFile: r.changedFile,
+        kind: r.kind,
+        line: r.line,
+        excerpt: r.excerpt,
+      })),
+    })),
+  };
+}
+
+function renderDriftReport(
+  source: string,
+  changedFiles: string[],
+  affected: AffectedPage[]
+): void {
+  console.log();
+  console.log(chalk.bold.underline(`Drift check: ${source}`));
+  console.log(
+    chalk.dim(
+      `${changedFiles.length} file${changedFiles.length === 1 ? "" : "s"} changed`
+    )
+  );
+  console.log();
+
+  if (affected.length === 0) {
+    console.log(chalk.green("  \u2713 No wiki pages reference the changed files."));
+    console.log(chalk.dim("    Nothing to re-approve or re-sync."));
+    console.log();
+    return;
+  }
+
+  // Classification summary.
+  const drifted = affected.filter((a) => a.classification === "drifted");
+  const stale = affected.filter((a) => a.classification === "stale");
+  const unblessed = affected.filter((a) => a.classification === "unblessed");
+
+  const lines: string[] = [];
+  if (drifted.length > 0) {
+    lines.push(
+      chalk.red(
+        `${drifted.length} drifted (approved before this change)`
+      )
+    );
+  }
+  if (stale.length > 0) {
+    lines.push(chalk.yellow(`${stale.length} stale (refreshed before this change)`));
+  }
+  if (unblessed.length > 0) {
+    lines.push(chalk.dim(`${unblessed.length} not yet approved (manual notes, no trust signal)`));
+  }
+  console.log("  " + lines.join(chalk.dim(" · ")));
+  console.log();
+
+  for (const a of affected) {
+    const badge = classificationBadge(a.classification);
+    const path = chalk.bold(a.page.path);
+    console.log(`  ${badge}  ${path}`);
+    if (a.bless.status === "blessed") {
+      const by = chalk.cyan(a.bless.stamp.blessed_by);
+      const sha = a.bless.stamp.blessed_at_sha ? chalk.dim(`@ ${a.bless.stamp.blessed_at_sha}`) : "";
+      console.log(`        ${chalk.dim("last approved by")} ${by} ${sha}`.trimEnd());
+    }
+    // Show a handful of match reasons, truncated to keep the output
+    // scannable.
+    const shown = a.reasons.slice(0, 3);
+    for (const r of shown) {
+      const kindTag = chalk.dim(`[${r.kind}]`);
+      const excerpt = r.excerpt.length > 80 ? r.excerpt.slice(0, 77) + "\u2026" : r.excerpt;
+      console.log(`        ${kindTag} line ${r.line + 1}: ${chalk.dim(excerpt)}`);
+    }
+    if (a.reasons.length > shown.length) {
+      const more = a.reasons.length - shown.length;
+      console.log(`        ${chalk.dim(`\u2026 ${more} more reference${more === 1 ? "" : "s"}`)}`);
+    }
+  }
+  console.log();
+
+  if (drifted.length > 0) {
+    console.log(
+      chalk.yellow(
+        `  Tip: run \`ctx approve ${drifted[0].page.path}\` after re-reading the page to clear drift.`
+      )
+    );
+    console.log();
+  }
+}
+
+function classificationBadge(cls: string): string {
+  switch (cls) {
+    case "drifted":
+      return chalk.red("\u2717 drifted ");
+    case "stale":
+      return chalk.yellow("! stale   ");
+    case "unblessed":
+      // Classification key stays `unblessed` for JSON/API stability;
+      // only the human label reads "not approved".
+      return chalk.dim("\u2013 not approved");
+    default:
+      return chalk.dim("\u2013 unknown   ");
+  }
 }
 
 /**

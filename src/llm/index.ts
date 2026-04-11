@@ -160,12 +160,29 @@ export function createLLMFromCtxConfig(
   // don't break existing ctx.yaml files.
   const baseModel = ai?.model ?? config?.costs?.model;
 
+  // Treat empty strings as unset — the loader's ${VAR} interpolation
+  // resolves missing env vars to "", and we don't want that to leak
+  // through as an empty apiKey or baseUrl that downstream SDKs will
+  // happily try to use (producing confusing auth errors).
+  const apiKey = ai?.api_key && ai.api_key.trim() !== "" ? ai.api_key : undefined;
+  const baseUrl = ai?.base_url && ai.base_url.trim() !== "" ? ai.base_url : undefined;
+
+  // Same "drop empties" treatment for ai.headers — an interpolated
+  // ${MISSING_VAR} shouldn't result in sending a header with value "".
+  const headers = ai?.headers
+    ? Object.fromEntries(
+        Object.entries(ai.headers).filter(([, v]) => typeof v === "string" && v.trim() !== "")
+      )
+    : undefined;
+  const headersClean = headers && Object.keys(headers).length > 0 ? headers : undefined;
+
   const llmConfig: LLMConfig = {
     provider,
     ...(baseModel !== undefined && { model: baseModel }),
-    ...(ai?.base_url !== undefined && { baseUrl: ai.base_url }),
-    ...(ai?.api_key !== undefined && { apiKey: ai.api_key }),
+    ...(baseUrl !== undefined && { baseUrl }),
+    ...(apiKey !== undefined && { apiKey }),
     ...(ai?.models !== undefined && { models: ai.models }),
+    ...(headersClean !== undefined && { headers: headersClean }),
   };
 
   // Per-operation override — may switch providers entirely.

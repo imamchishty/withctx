@@ -8,7 +8,9 @@ import { loadConfig, getProjectRoot } from "../../config/loader.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
 import { createLLMFromCtxConfig } from "../../llm/index.js";
-import { recordCall } from "../../usage/recorder.js";
+import { recordCall, resolvePricing } from "../../usage/recorder.js";
+import { assertWithinBudget, BudgetExceededError } from "../../usage/budget.js";
+import { noCtxDirError, noWikiPagesError } from "../../errors.js";
 import { VectorManager } from "../../vector/index.js";
 import type { SearchResult, VectorStoreConfig } from "../../types/vector.js";
 import { heading, dim, success, divider } from "../utils/ui.js";
@@ -43,9 +45,9 @@ interface QueryHistory {
 const HISTORY_FILE = ".query-history.json";
 const MAX_HISTORY_TURNS = 6;
 
-// Rough pricing per 1M tokens for Sonnet-class models (input/output).
-const INPUT_COST_PER_1M = 3.0;
-const OUTPUT_COST_PER_1M = 15.0;
+// Threshold above which we print a cost estimate + prompt before
+// calling the LLM. Below this, the spend is negligible and the prompt
+// would just be noise.
 const COST_WARN_THRESHOLD = 0.01;
 
 function estimateTokens(text: string): number {
@@ -53,10 +55,20 @@ function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
-function estimateCost(inputTokens: number, outputTokens: number): number {
+/**
+ * Estimate query cost using the central pricing resolver. Picks up
+ * any user `ai.pricing` overrides and falls back to Sonnet pricing for
+ * unknown models — same behaviour as ctx sync / ingest / costs, so
+ * there's exactly one cost story across the CLI.
+ */
+function estimateCost(inputTokens: number, outputTokens: number, model: string): number {
+  const pricing =
+    resolvePricing(model) ??
+    resolvePricing("claude-sonnet-4") ??
+    { input: 3, output: 15 };
   return (
-    (inputTokens * INPUT_COST_PER_1M) / 1_000_000 +
-    (outputTokens * OUTPUT_COST_PER_1M) / 1_000_000
+    (inputTokens * pricing.input) / 1_000_000 +
+    (outputTokens * pricing.output) / 1_000_000
   );
 }
 
@@ -218,13 +230,22 @@ export function registerQueryCommand(program: Command): void {
         const ctxDir = new CtxDirectory(projectRoot);
 
         if (!ctxDir.exists()) {
-          spinner?.fail(chalk.red("No .ctx/ directory found. Run 'ctx setup' first."));
-          if (raw) console.error("No .ctx/ directory found. Run 'ctx setup' first.");
-          process.exit(1);
+          spinner?.stop();
+          throw noCtxDirError();
         }
 
         const pageManager = new PageManager(ctxDir);
         const topK = options.topK ? Math.max(1, parseInt(options.topK, 10)) : 8;
+
+        // Resolve the model name once up front so every estimateCost
+        // call below hits the same pricing row. Priority order matches
+        // createLLMFromCtxConfig: per-op override → ai.model → legacy
+        // costs.model → built-in default.
+        const queryModel =
+          config.ai?.models?.query ??
+          config.ai?.model ??
+          config.costs?.model ??
+          "claude-sonnet-4";
 
         // --- 1. Vector-first retrieval (with graceful fallback) -----------
         let contextFiles: Array<{ path: string; content: string }> = [];
@@ -245,12 +266,8 @@ export function registerQueryCommand(program: Command): void {
           if (spinner) spinner.text = "Loading full wiki (vector store unavailable)...";
           const pages = pageManager.list(options.scope);
           if (pages.length === 0) {
-            spinner?.fail(
-              chalk.red("No wiki pages found. Run 'ctx ingest' to compile your context.")
-            );
-            if (raw)
-              console.error("No wiki pages found. Run 'ctx ingest' to compile your context.");
-            process.exit(1);
+            spinner?.stop();
+            throw noWikiPagesError();
           }
           for (const pagePath of pages) {
             const page = pageManager.read(pagePath);
@@ -269,9 +286,22 @@ export function registerQueryCommand(program: Command): void {
         const historyBlob = history.turns.map((t) => t.content).join("\n");
         const maxOutputTokens = options.maxTokens ? parseInt(options.maxTokens, 10) : 1500;
         const estInput = estimateTokens(contextBlob + historyBlob + question) + 200;
-        const estCost = estimateCost(estInput, maxOutputTokens);
+        const estCost = estimateCost(estInput, maxOutputTokens, queryModel);
 
         if (spinner) spinner.stop();
+
+        // Hard budget enforcement — reject the call before it's issued
+        // if month-to-date spend + this call would exceed costs.budget.
+        try {
+          assertWithinBudget(ctxDir, config, estCost, "ctx query");
+        } catch (err) {
+          if (err instanceof BudgetExceededError) {
+            if (raw) console.error(err.message);
+            else console.error(chalk.red(err.message));
+            process.exit(78);
+          }
+          throw err;
+        }
 
         if (!raw && estCost > COST_WARN_THRESHOLD && !options.yes) {
           console.log();
@@ -321,7 +351,37 @@ ${question}
 - Be concise but thorough.`;
 
         let response;
-        if (options.continue && history.turns.length > 0) {
+        // Streaming path: only when the caller actually benefits from
+        // live tokens — interactive TTY, vector retrieval (single-turn),
+        // no --raw, no --continue, provider supports it. Every other
+        // caller (scripts, --json, --raw, multi-turn) uses the batched
+        // prompt() path so buffered consumers see the full answer.
+        const canStream =
+          retrievalMode === "vector" &&
+          !options.continue &&
+          !raw &&
+          process.stdout.isTTY === true &&
+          typeof claude.promptStream === "function";
+
+        if (canStream && claude.promptStream) {
+          askSpinner?.stop();
+          // Render the "Answer" heading up-front so the streaming
+          // tokens appear in the same visual block as the non-stream
+          // path — users see the same UI with a faster first token.
+          heading("Answer");
+          console.log();
+          const handle = claude.promptStream(userPrompt, {
+            systemPrompt,
+            maxTokens: maxOutputTokens,
+          });
+          for await (const chunk of handle.textStream) {
+            process.stdout.write(chunk);
+          }
+          if (!process.stdout.write("\n")) {
+            // best-effort drain
+          }
+          response = await handle.finalResponse;
+        } else if (options.continue && history.turns.length > 0) {
           // Multi-turn: build conversation with prior turns + current.
           const messages: Array<{ role: "user" | "assistant"; content: string }> = [];
           for (const turn of history.turns) {
@@ -333,30 +393,36 @@ ${question}
             systemPrompt,
             maxTokens: maxOutputTokens,
           });
+          askSpinner?.stop();
         } else if (retrievalMode === "full") {
           // Full wiki: use promptWithFiles for prompt caching.
           response = await claude.promptWithFiles(userPrompt, contextFiles, {
             systemPrompt,
             maxTokens: maxOutputTokens,
           });
+          askSpinner?.stop();
         } else {
           // Vector mode: chunks are embedded in the prompt directly.
           response = await claude.prompt(userPrompt, {
             systemPrompt,
             maxTokens: maxOutputTokens,
           });
+          askSpinner?.stop();
         }
-
-        askSpinner?.stop();
 
         // --- 5. Render output --------------------------------------------
         if (raw) {
           process.stdout.write(response.content);
           if (!response.content.endsWith("\n")) process.stdout.write("\n");
         } else {
-          heading("Answer");
-          console.log();
-          console.log(response.content);
+          // Streaming path already rendered the "Answer" heading and
+          // the body; skip re-rendering and jump straight to sources +
+          // stats.
+          if (!canStream) {
+            heading("Answer");
+            console.log();
+            console.log(response.content);
+          }
           console.log();
 
           if (citations.length > 0) {
@@ -380,7 +446,11 @@ ${question}
             );
           }
           const actualCost = response.tokensUsed
-            ? estimateCost(response.tokensUsed.input, response.tokensUsed.output)
+            ? estimateCost(
+                response.tokensUsed.input,
+                response.tokensUsed.output,
+                claude.getModel()
+              )
             : estCost;
           stats.push(`~$${actualCost.toFixed(4)}`);
           dim(stats.join("  \u00B7  "));
@@ -441,9 +511,14 @@ _Query answered: ${new Date().toISOString()}_
           }
         }
       } catch (error) {
-        spinner?.fail(chalk.red("Query failed"));
+        spinner?.stop();
+        // CtxError bubbles up to the global handler in cli/index.ts,
+        // which formats it with code + "To fix:" + docs link. Don't
+        // swallow it here with a generic "Query failed" ring.
+        const { isCtxError } = await import("../../errors.js");
+        if (isCtxError(error)) throw error;
         if (error instanceof Error) {
-          console.error(chalk.red(`  ${error.message}`));
+          console.error(chalk.red(`Query failed: ${error.message}`));
         }
         process.exit(1);
       }

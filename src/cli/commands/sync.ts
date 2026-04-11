@@ -4,39 +4,43 @@ import ora from "ora";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { loadConfig, getProjectRoot } from "../../config/loader.js";
+import { checkRefreshPolicy } from "../../config/refresh-policy.js";
 import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
 import { createLLMFromCtxConfig } from "../../llm/index.js";
+import { assertWithinBudget, BudgetExceededError, checkBudgetWarning } from "../../usage/budget.js";
 import { ConnectorRegistry } from "../../connectors/registry.js";
 import { LocalFilesConnector } from "../../connectors/local-files.js";
+import { safeResolve } from "../../security/paths.js";
 import { HashIndex, type SyncIndex, type SyncIndexEntry } from "../../sync/hash-index.js";
 import { formatCost, formatDuration } from "../utils/progress.js";
 import * as ui from "../utils/ui.js";
 import type { RawDocument } from "../../types/source.js";
-import { recordCall, recordSnapshot } from "../../usage/recorder.js";
+import { recordCall, recordSnapshot, resolvePricing, recordRefresh } from "../../usage/recorder.js";
+import {
+  detectActor,
+  detectTrigger,
+  confirmForcedRefresh,
+} from "../../usage/refresh-context.js";
 
 interface SyncOptions {
   source?: string;
   maxTokens?: string;
   dryRun?: boolean;
   force?: boolean;
+  allowLocalRefresh?: boolean;
+  yes?: boolean;
 }
-
-/** Model pricing per million tokens (input/output) */
-const MODEL_PRICING: Record<string, { input: number; output: number }> = {
-  "claude-sonnet-4": { input: 3, output: 15 },
-  "claude-sonnet-4-20250514": { input: 3, output: 15 },
-  "claude-opus-4": { input: 15, output: 75 },
-  "claude-haiku-3.5": { input: 0.8, output: 4 },
-  "claude-3-5-haiku-20241022": { input: 0.8, output: 4 },
-};
 
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 4);
 }
 
 function estimateCost(tokens: number, model: string): { input: number; output: number; total: number } {
-  const pricing = MODEL_PRICING[model] ?? MODEL_PRICING["claude-sonnet-4"];
+  // Pricing resolved from (in order): user-declared ai.pricing, built-in
+  // table, Sonnet fallback. Rough ballpark — used only for "this refresh
+  // will cost ~$X" pre-flight warnings, not billing.
+  const pricing = resolvePricing(model) ?? resolvePricing("claude-sonnet-4")!;
   const inputCost = (tokens / 1_000_000) * pricing.input;
   const estimatedOutputTokens = Math.ceil(tokens * 0.3);
   const outputCost = (estimatedOutputTokens / 1_000_000) * pricing.output;
@@ -68,32 +72,88 @@ export function registerSyncCommand(program: Command): void {
     .option("--max-tokens <n>", "Max tokens for Claude response")
     .option("--dry-run", "Show what would be synced without calling Claude")
     .option("--force", "Ignore hash index and rebuild everything")
+    .option(
+      "--allow-local-refresh",
+      "Bypass the refreshed_by: ci guardrail (use with care — burns budget)"
+    )
+    .option("-y, --yes", "Skip the forced-refresh confirmation prompt")
     .action(async (options: SyncOptions) => {
       const spinner = ora("Loading configuration...").start();
       const startTime = Date.now();
+
+      // Refresh-journal accumulators. Populated during the run and written
+      // as a single RefreshRecord at the end — on both success and failure
+      // — so `ctx history` can surface a complete audit trail including
+      // failed runs (useful for "why did CI stop updating the wiki?").
+      let refreshCtxDir: CtxDirectory | null = null;
+      let refreshModel = "claude-sonnet-4";
+      const refreshTokens = { input: 0, output: 0 };
+      let refreshCost = 0;
+      const refreshPages = { added: 0, changed: 0, removed: 0 };
+      let refreshForced = false;
 
       try {
         const config = loadConfig();
         const projectRoot = getProjectRoot();
         const ctxDir = new CtxDirectory(projectRoot);
+        refreshCtxDir = ctxDir;
+        refreshModel = config.costs?.model ?? "claude-sonnet-4";
+        refreshForced = options.allowLocalRefresh === true;
 
         if (!ctxDir.exists()) {
           spinner.fail(chalk.red("No .ctx/ directory found. Run 'ctx setup' first."));
           process.exit(1);
         }
 
+        // Block local rebuilds on CI-refreshed wikis unless --allow-local-refresh
+        // was passed. See src/config/refresh-policy.ts for the rule.
+        const guard = checkRefreshPolicy(config, "sync", {
+          allowLocalRefresh: options.allowLocalRefresh === true,
+        });
+        if (!guard.allowed) {
+          spinner.fail(chalk.yellow("Sync blocked"));
+          console.error();
+          console.error(chalk.yellow(`  ${guard.reason}`));
+          console.error();
+          process.exit(1);
+        }
+
+        // If the user bypassed the CI guardrail, show the cost warning and
+        // require explicit confirmation. This is a loud, one-time speed bump
+        // — people who really mean it can still pass -y / --yes.
+        const bypassingCiGuard =
+          config?.refreshed_by === "ci" && options.allowLocalRefresh === true;
+        if (bypassingCiGuard) {
+          spinner.stop();
+          const ok = await confirmForcedRefresh(ctxDir, { skipPrompt: options.yes === true });
+          if (!ok) {
+            console.log(chalk.dim("  Cancelled."));
+            return;
+          }
+          spinner.start("Loading configuration...");
+        }
+
         const syncState = loadSyncState(ctxDir);
         const hashIndex = new HashIndex(ctxDir.path);
         const oldIndex = await hashIndex.load();
 
-        // Build connectors
+        // Build connectors. Every local source path is resolved
+        // against the project root through `safeResolve` so an
+        // attacker-controlled ctx.yaml with `../../etc/passwd` or an
+        // absolute `/etc/hosts` can never be followed.
         const registry = new ConnectorRegistry();
         if (config.sources?.local) {
           for (const source of config.sources.local) {
             if (options.source && source.name !== options.source) continue;
-            const resolvedPath = source.path.startsWith(".")
-              ? `${projectRoot}/${source.path}`
-              : source.path;
+            const resolvedPath = safeResolve(source.path, projectRoot);
+            if (resolvedPath === null) {
+              console.warn(
+                chalk.yellow(
+                  `  ⚠ skipping source "${source.name}" — path "${source.path}" escapes project root`
+                )
+              );
+              continue;
+            }
             registry.register(new LocalFilesConnector(source.name, resolvedPath));
           }
         }
@@ -263,6 +323,27 @@ export function registerSyncCommand(program: Command): void {
           return;
         }
 
+        // --- Hard budget enforcement ---
+        // Check month-to-date spend before making any call. Throws if
+        // adding this run's estimated cost would exceed costs.budget.
+        // Escape hatch: CTX_IGNORE_BUDGET=1.
+        {
+          const model = config.costs?.model ?? config.ai?.model ?? "claude-sonnet-4";
+          const incrTokens = estimateTokens(docsToCompile.map(d => d.content).join(""));
+          const incrCost = estimateCost(incrTokens, model).total;
+          try {
+            assertWithinBudget(ctxDir, config, incrCost, "ctx sync");
+          } catch (err) {
+            if (err instanceof BudgetExceededError) {
+              console.error(chalk.red(err.message));
+              process.exit(78);
+            }
+            throw err;
+          }
+          const warning = checkBudgetWarning(ctxDir, config, incrCost);
+          if (warning) console.error(chalk.yellow(`  ${warning}`));
+        }
+
         // Check Claude availability
         const claude = createLLMFromCtxConfig(config, "sync");
         const available = await claude.isAvailable();
@@ -408,9 +489,10 @@ ${unaffectedPages.join(", ") || "(none)"}
 
         // Compute actual cost from Claude response if available.
         const model = config.costs?.model ?? "claude-sonnet-4";
+        refreshModel = model;
         let actualCost = 0;
         if (response.tokensUsed) {
-          const pricing = MODEL_PRICING[model] ?? MODEL_PRICING["claude-sonnet-4"];
+          const pricing = resolvePricing(model) ?? resolvePricing("claude-sonnet-4")!;
           actualCost =
             (response.tokensUsed.input / 1_000_000) * pricing.input +
             (response.tokensUsed.output / 1_000_000) * pricing.output;
@@ -421,10 +503,16 @@ ${unaffectedPages.join(", ") || "(none)"}
             cacheRead: response.tokensUsed.cacheRead ?? 0,
             cacheWrite: response.tokensUsed.cacheCreation ?? 0,
           });
+          refreshTokens.input += response.tokensUsed.input;
+          refreshTokens.output += response.tokensUsed.output;
         } else {
           const tokens = estimateTokens(docsToCompile.map((d) => d.content).join(""));
           actualCost = estimateCost(tokens, model).total;
         }
+        refreshCost = actualCost;
+        refreshPages.added = newPagePaths.size;
+        refreshPages.changed = rebuiltPagePaths.size;
+        refreshPages.removed = diff.removed.length;
 
         // Snapshot wiki state for growth charts (best-effort).
         try {
@@ -458,10 +546,50 @@ ${unaffectedPages.join(", ") || "(none)"}
           actualCost,
           fullRebuildCost,
         });
+
+        // Append one-per-run refresh journal entry. `ctx history` reads
+        // this back, and the cost-warning prompt reads the most recent
+        // entry to say "last refresh cost $X".
+        try {
+          recordRefresh(ctxDir, {
+            actor: detectActor(),
+            trigger: detectTrigger("sync", refreshForced),
+            forced: refreshForced,
+            model: refreshModel,
+            tokens: refreshTokens,
+            cost: refreshCost,
+            pages: refreshPages,
+            duration_ms: Date.now() - startTime,
+            success: true,
+            error: null,
+          });
+        } catch {
+          // Journal writes should never break the sync itself.
+        }
       } catch (error) {
         spinner.fail(chalk.red("Sync failed"));
         if (error instanceof Error) {
           console.error(chalk.red(`  ${error.message}`));
+        }
+        // Record the failure in the refresh journal so `ctx history` shows
+        // it. Only attempted if we got far enough to resolve the ctx dir.
+        if (refreshCtxDir) {
+          try {
+            recordRefresh(refreshCtxDir, {
+              actor: detectActor(),
+              trigger: detectTrigger("sync", refreshForced),
+              forced: refreshForced,
+              model: refreshModel,
+              tokens: refreshTokens,
+              cost: refreshCost,
+              pages: refreshPages,
+              duration_ms: Date.now() - startTime,
+              success: false,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          } catch {
+            // best-effort
+          }
         }
         process.exit(1);
       }

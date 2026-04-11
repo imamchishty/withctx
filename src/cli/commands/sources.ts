@@ -1,10 +1,11 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import ora from "ora";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { parse as parseYaml, stringify as yamlStringify } from "yaml";
 import { loadConfig, findConfigFile } from "../../config/loader.js";
 import { runInteractiveSourceAdd } from "./sources-interactive.js";
+import { writeSecretFile } from "../../security/fs-modes.js";
 
 // ---------------------------------------------------------------------------
 // Config helpers
@@ -16,7 +17,10 @@ function readRawConfig(configPath: string): Record<string, unknown> {
 }
 
 function writeRawConfig(configPath: string, data: Record<string, unknown>): void {
-  writeFileSync(configPath, yamlStringify(data, { lineWidth: 120 }));
+  // 0600 on ctx.yaml — it can contain `${VAR}` references that
+  // resolve to secrets at runtime, so we don't want group/world
+  // read access on shared machines.
+  writeSecretFile(configPath, yamlStringify(data, { lineWidth: 120 }));
 }
 
 // ---------------------------------------------------------------------------

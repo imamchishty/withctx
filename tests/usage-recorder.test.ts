@@ -7,10 +7,15 @@ import { CtxDirectory } from "../src/storage/ctx-dir.js";
 import {
   recordCall,
   recordSnapshot,
+  recordRefresh,
   readUsage,
   getCalls,
   getSnapshots,
+  getRefreshes,
+  getLastRefresh,
   calculateCost,
+  setCustomPricing,
+  resolvePricing,
   MODEL_PRICING,
 } from "../src/usage/recorder.js";
 
@@ -131,6 +136,140 @@ describe("usage recorder", () => {
       ]);
       expect(getCalls(records)).toHaveLength(2);
       expect(getSnapshots(records)).toHaveLength(2);
+    });
+  });
+
+  describe("custom pricing (ai.pricing override)", () => {
+    afterEach(() => {
+      // Clear the global custom-pricing map so one test doesn't poison another.
+      setCustomPricing({});
+    });
+
+    it("resolvePricing returns null for unknown models by default", () => {
+      setCustomPricing({});
+      expect(resolvePricing("totally-made-up-model")).toBeNull();
+    });
+
+    it("resolvePricing returns built-in entries without custom pricing", () => {
+      setCustomPricing({});
+      const sonnet = resolvePricing("claude-sonnet-4");
+      expect(sonnet).not.toBeNull();
+      expect(sonnet!.input).toBe(3);
+      expect(sonnet!.output).toBe(15);
+    });
+
+    it("custom pricing is used when declared", () => {
+      setCustomPricing({
+        "our-private-llama-3": { input: 0.1, output: 0.4 },
+      });
+      const priv = resolvePricing("our-private-llama-3");
+      expect(priv).toEqual({ input: 0.1, output: 0.4 });
+    });
+
+    it("custom pricing overrides built-in entries", () => {
+      setCustomPricing({
+        "claude-sonnet-4": { input: 2.5, output: 12 }, // negotiated rate
+      });
+      const sonnet = resolvePricing("claude-sonnet-4");
+      expect(sonnet).toEqual({ input: 2.5, output: 12 });
+    });
+
+    it("calculateCost uses custom pricing end-to-end", () => {
+      setCustomPricing({
+        "my-core42-model": { input: 1, output: 5 },
+      });
+      // 1M input * $1 + 1M output * $5 = $6
+      const cost = calculateCost("my-core42-model", 1_000_000, 1_000_000);
+      expect(cost).toBeCloseTo(6, 5);
+    });
+
+    it("unknown model with no custom pricing still returns non-zero (sonnet fallback)", () => {
+      setCustomPricing({});
+      const cost = calculateCost("mystery-model", 1_000_000, 1_000_000);
+      expect(cost).toBeGreaterThan(0);
+    });
+  });
+
+  describe("recordRefresh (refresh journal)", () => {
+    it("appends a refresh record with all fields", () => {
+      const rec = recordRefresh(ctxDir, {
+        actor: "alice@laptop",
+        trigger: "sync",
+        forced: false,
+        model: "claude-sonnet-4",
+        tokens: { input: 12_000, output: 4_000 },
+        cost: 0.1,
+        pages: { added: 1, changed: 2, removed: 0 },
+        duration_ms: 1234,
+        success: true,
+        error: null,
+      });
+
+      expect(rec.kind).toBe("refresh");
+      expect(rec.actor).toBe("alice@laptop");
+      expect(rec.tokens.input).toBe(12_000);
+      expect(rec.pages.changed).toBe(2);
+
+      const records = readUsage(ctxDir);
+      expect(getRefreshes(records)).toHaveLength(1);
+    });
+
+    it("records failed refreshes with an error message", () => {
+      recordRefresh(ctxDir, {
+        actor: "ci:withctx",
+        trigger: "schedule",
+        forced: false,
+        model: "claude-sonnet-4",
+        tokens: { input: 0, output: 0 },
+        cost: 0,
+        pages: { added: 0, changed: 0, removed: 0 },
+        duration_ms: 42,
+        success: false,
+        error: "JIRA_TOKEN not set",
+      });
+
+      const refreshes = getRefreshes(readUsage(ctxDir));
+      expect(refreshes).toHaveLength(1);
+      expect(refreshes[0].success).toBe(false);
+      expect(refreshes[0].error).toBe("JIRA_TOKEN not set");
+    });
+
+    it("getLastRefresh returns the most recent record", () => {
+      recordRefresh(ctxDir, {
+        actor: "a",
+        trigger: "sync",
+        forced: false,
+        model: "m",
+        tokens: { input: 1, output: 1 },
+        cost: 0,
+        pages: { added: 0, changed: 0, removed: 0 },
+        duration_ms: 1,
+        success: true,
+        error: null,
+      });
+      recordRefresh(ctxDir, {
+        actor: "b",
+        trigger: "force",
+        forced: true,
+        model: "m",
+        tokens: { input: 1, output: 1 },
+        cost: 0,
+        pages: { added: 0, changed: 0, removed: 0 },
+        duration_ms: 1,
+        success: true,
+        error: null,
+      });
+
+      const last = getLastRefresh(readUsage(ctxDir));
+      expect(last).not.toBeNull();
+      expect(last!.actor).toBe("b");
+      expect(last!.forced).toBe(true);
+    });
+
+    it("getLastRefresh returns null when no refreshes exist", () => {
+      recordCall(ctxDir, "ingest", "claude-sonnet-4", { input: 10, output: 5 });
+      const last = getLastRefresh(readUsage(ctxDir));
+      expect(last).toBeNull();
     });
   });
 

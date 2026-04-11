@@ -6,7 +6,8 @@
 import chalk from "chalk";
 import ora from "ora";
 import { createInterface } from "node:readline";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
+import { writeSecretFile } from "../../security/fs-modes.js";
 import { resolve } from "node:path";
 import { parse as parseYaml, stringify as yamlStringify } from "yaml";
 import { findConfigFile } from "../../config/loader.js";
@@ -841,7 +842,9 @@ export function writeRawConfig(
   configPath: string,
   data: Record<string, unknown>
 ): void {
-  writeFileSync(configPath, yamlStringify(data, { lineWidth: 120 }));
+  // 0600 — ctx.yaml can expand secrets via `${VAR}` so we don't
+  // want group/world read on shared systems.
+  writeSecretFile(configPath, yamlStringify(data, { lineWidth: 120 }));
 }
 
 /**

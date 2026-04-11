@@ -1,7 +1,31 @@
 import { CtxDirectory } from "../storage/ctx-dir.js";
 import type { WikiPage, IndexEntry } from "../types/page.js";
-import { readFileSync, existsSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { join, basename } from "node:path";
+import {
+  parsePage,
+  stampMetadata,
+  stripMetadata,
+  type PageMetadata,
+} from "./metadata.js";
+import { detectActor } from "../usage/refresh-context.js";
+
+/**
+ * Options for writing a page. `meta` is merged into any existing ctx
+ * front-matter the caller may have embedded; unspecified fields are
+ * auto-stamped (`refreshed_at`, `refreshed_by`) so the Info-axis
+ * guarantee — every page carries a freshness header — holds even for
+ * call sites that don't know about metadata.
+ */
+export interface WritePageOptions {
+  meta?: PageMetadata;
+  /**
+   * Skip the auto-stamp of `refreshed_at` / `refreshed_by`. Used by
+   * tests and by the reset command. You almost never want this in
+   * production code paths.
+   */
+  skipStamp?: boolean;
+}
 
 /**
  * Manages wiki page CRUD operations.
@@ -14,31 +38,60 @@ export class PageManager {
   }
 
   /**
-   * Read a wiki page by relative path.
+   * Read a wiki page by relative path. Parses any `ctx` front-matter
+   * into `page.meta` and strips it from `page.content` so downstream
+   * consumers (LLM prompts, exports) see the body only.
    */
   read(relativePath: string): WikiPage | null {
-    const content = this.ctx.readPage(relativePath);
-    if (!content) return null;
+    const raw = this.ctx.readPage(relativePath);
+    if (!raw) return null;
 
     const fullPath = join(this.ctx.contextPath, relativePath);
     const stat = statSync(fullPath);
 
+    const parsed = parsePage(raw);
+    const body = Object.keys(parsed.otherFrontmatter).length
+      ? stripMetadata(raw)
+      : parsed.body;
+
     return {
       path: relativePath,
-      title: this.extractTitle(content),
-      content,
+      title: this.extractTitle(body),
+      content: body,
       createdAt: stat.birthtime.toISOString(),
-      updatedAt: stat.mtime.toISOString(),
-      sources: this.extractSources(content),
-      references: this.extractReferences(content),
+      updatedAt: parsed.meta.refreshed_at ?? stat.mtime.toISOString(),
+      sources: this.extractSources(body),
+      references: this.extractReferences(body),
+      meta: parsed.meta,
     };
   }
 
   /**
-   * Write or update a wiki page.
+   * Read a page's raw content including front-matter — used by lint /
+   * verify / export paths that want to round-trip the block untouched.
    */
-  write(relativePath: string, content: string): void {
-    this.ctx.writePage(relativePath, content);
+  readRaw(relativePath: string): string | null {
+    return this.ctx.readPage(relativePath);
+  }
+
+  /**
+   * Write or update a wiki page. Auto-stamps `refreshed_at` and
+   * `refreshed_by` unless `skipStamp` is passed. Any caller-supplied
+   * `meta` fields are merged on top.
+   */
+  write(
+    relativePath: string,
+    content: string,
+    options: WritePageOptions = {}
+  ): void {
+    const stamped = options.skipStamp
+      ? content
+      : stampMetadata(content, {
+          refreshed_at: new Date().toISOString(),
+          refreshed_by: safeDetectActor(),
+          ...(options.meta ?? {}),
+        });
+    this.ctx.writePage(relativePath, stamped);
   }
 
   /**
@@ -124,5 +177,18 @@ export class PageManager {
       refs.push(match[2]);
     }
     return [...new Set(refs)];
+  }
+}
+
+/**
+ * Actor detection can throw in edge cases (e.g. missing os.userInfo()
+ * on some Docker images). A freshness stamp is never worth crashing
+ * a wiki write, so we fall back to a generic label.
+ */
+function safeDetectActor(): string {
+  try {
+    return detectActor();
+  } catch {
+    return "unknown";
   }
 }

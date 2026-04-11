@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, existsSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import { homedir } from "node:os";
 
 /**
  * A git repository discovered while scanning a parent directory for
@@ -200,6 +201,172 @@ export function normaliseGitUrl(url: string): string | null {
   }
 
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Scattered-repo support
+// ---------------------------------------------------------------------------
+// The sibling scan above handles the "parent folder with child repos" layout.
+// Real developers rarely have that. More common is repos scattered across
+// the filesystem:
+//
+//   ~/work/lsp-web
+//   ~/Code/lsp-core
+//   ~/src/acme/lsp-data
+//   /opt/lsp-api
+//
+// For that layout we need to let the user hand us an explicit list. These
+// helpers turn one path (or a file of paths) into the same `DetectedRepo`
+// shape the sibling scanner produces, so downstream code (runInit,
+// ctx publish) doesn't care how the repo was discovered.
+
+/**
+ * Expand a leading `~` in a path to the user's home directory. Left alone
+ * if `~` isn't the first character — so `./~foo` (a literal folder) stays
+ * literal. We deliberately don't use `shell.expand` or `os.homedir()`
+ * substitution for `$HOME` because that's the shell's job; users who need
+ * env-var expansion in paths can let their shell do it before the path
+ * reaches us.
+ */
+function expandHome(path: string): string {
+  if (path === "~") return homedir();
+  if (path.startsWith("~/")) return join(homedir(), path.slice(2));
+  return path;
+}
+
+/**
+ * Read a single directory on disk as a git repo. Returns a `DetectedRepo`
+ * if the folder exists and contains a `.git` directory or worktree marker,
+ * otherwise null. The `anchorDir` is used to compute a relative `path`
+ * field for the output — typically the directory that owns `ctx.yaml`.
+ *
+ * The relative path is what lands in `sources.local[].path`, so downstream
+ * ingest can resolve it. If the repo lives outside the anchor (i.e. the
+ * `relative()` result would start with `..`), we use the absolute path
+ * instead — relative paths climbing out of the config directory are a
+ * common cause of ingest bugs.
+ */
+export function readRepoAt(
+  absolutePath: string,
+  anchorDir: string
+): DetectedRepo | null {
+  if (!existsSync(absolutePath)) return null;
+
+  let stat;
+  try {
+    stat = statSync(absolutePath);
+  } catch {
+    return null;
+  }
+  if (!stat.isDirectory()) return null;
+
+  const gitPath = join(absolutePath, ".git");
+  if (!existsSync(gitPath)) return null;
+
+  let isGit = false;
+  try {
+    const gitStat = statSync(gitPath);
+    if (gitStat.isDirectory()) isGit = true;
+    else if (gitStat.isFile()) isGit = true; // worktree marker
+  } catch {
+    return null;
+  }
+  if (!isGit) return null;
+
+  // Prefer a relative path that stays inside the anchor. If the repo is
+  // elsewhere on disk, fall back to the absolute path — safer than a
+  // `../../../foo` that breaks as soon as ctx.yaml moves.
+  const rel = relative(anchorDir, absolutePath);
+  const path =
+    rel === ""
+      ? "."
+      : rel.startsWith("..") || isAbsolute(rel)
+        ? absolutePath
+        : `./${rel}`;
+
+  return {
+    name: basename(absolutePath),
+    path,
+    absolutePath,
+    github: parseOriginUrl(absolutePath),
+    branch: parseCurrentBranch(absolutePath),
+  };
+}
+
+/**
+ * Resolve a list of user-supplied paths into `DetectedRepo` entries.
+ *
+ * - Paths starting with `~` get the user's home directory expanded.
+ * - Relative paths are resolved against `cwd` (typically process.cwd()).
+ * - Paths that aren't git repos are skipped — we don't error, because a
+ *   partial success ("3 of 4 repos found") is more useful than failing
+ *   the whole command. Callers get a list of the missing paths via the
+ *   `missing` field so they can warn.
+ * - Duplicate paths (after resolution) are de-duplicated.
+ * - Result is sorted alphabetically by name.
+ */
+export function readReposFromPaths(
+  paths: string[],
+  cwd: string,
+  anchorDir: string
+): { repos: DetectedRepo[]; missing: string[] } {
+  const repos: DetectedRepo[] = [];
+  const missing: string[] = [];
+  const seen = new Set<string>();
+
+  for (const raw of paths) {
+    const expanded = expandHome(raw.trim());
+    if (expanded === "") continue;
+
+    const absolute = isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
+    if (seen.has(absolute)) continue;
+    seen.add(absolute);
+
+    const repo = readRepoAt(absolute, anchorDir);
+    if (repo === null) {
+      missing.push(raw);
+    } else {
+      repos.push(repo);
+    }
+  }
+
+  return {
+    repos: repos.sort((a, b) => a.name.localeCompare(b.name)),
+    missing,
+  };
+}
+
+/**
+ * Read a newline-delimited repo manifest file. Format:
+ *
+ *   # Comments start with #
+ *   ~/work/lsp-web
+ *   ~/Code/lsp-core
+ *   /opt/lsp-api
+ *
+ * Blank lines are ignored. Inline comments after a `#` are stripped.
+ * Paths are returned as-is — expansion happens in `readReposFromPaths`.
+ *
+ * Throws if the file can't be read, so the caller can surface a clean
+ * error. (A missing manifest file is a user mistake, not a "silently
+ * continue" case.)
+ */
+export function parseReposFile(filePath: string): string[] {
+  const content = readFileSync(filePath, "utf-8");
+  const lines = content.split(/\r?\n/);
+  const paths: string[] = [];
+
+  for (const line of lines) {
+    // Strip inline comments, but preserve `#` inside quoted paths. Users
+    // with `#` in a folder name are extremely rare — we optimise for the
+    // common "# comment" case and tell the weird case to quote.
+    const withoutComment = line.replace(/\s+#.*$/, "").replace(/^#.*$/, "");
+    const trimmed = withoutComment.trim();
+    if (trimmed === "") continue;
+    paths.push(trimmed);
+  }
+
+  return paths;
 }
 
 /**

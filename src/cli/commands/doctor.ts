@@ -234,7 +234,8 @@ function checkApiKey(config?: CtxConfig | null): CheckResult {
 }
 
 async function checkApiConnection(
-  config?: CtxConfig | null
+  config?: CtxConfig | null,
+  options?: { silent?: boolean }
 ): Promise<CheckResult> {
   const providerName = resolveProviderName(config);
   const meta = PROVIDER_META[providerName];
@@ -249,7 +250,9 @@ async function checkApiConnection(
     };
   }
 
-  const spinner = ora({ text: "Testing API connection...", indent: 2 }).start();
+  const spinner = options?.silent
+    ? null
+    : ora({ text: "Testing API connection...", indent: 2 }).start();
 
   try {
     const llm = createLLMFromCtxConfig(config);
@@ -260,7 +263,7 @@ async function checkApiConnection(
     const providerBadge = chalk.dim(`[${providerName}]`);
 
     if (available) {
-      spinner.stop();
+      spinner?.stop();
       return {
         label: "API connection",
         status: "pass",
@@ -268,7 +271,7 @@ async function checkApiConnection(
       };
     }
 
-    spinner.stop();
+    spinner?.stop();
     return {
       label: "API connection",
       status: "fail",
@@ -278,7 +281,7 @@ async function checkApiConnection(
         : `Check that ${baseURL} is reachable and speaks the ${providerName} API.`,
     };
   } catch (error) {
-    spinner.stop();
+    spinner?.stop();
     const msg = error instanceof Error ? error.message : "Unknown error";
     return {
       label: "API connection",
@@ -569,16 +572,21 @@ export function registerDoctorCommand(program: Command): void {
   program
     .command("doctor")
     .description("Run pre-flight diagnostics — check environment, config, sources, and API connectivity")
-    .action(async () => {
-      console.log();
-      console.log(chalk.bold.cyan("ctx doctor"));
-      console.log(divider("\u2500", 50));
-      console.log();
+    .option("--json", "Emit machine-readable JSON instead of the dashboard")
+    .action(async (opts: { json?: boolean }) => {
+      const json = opts.json === true;
+
+      if (!json) {
+        console.log();
+        console.log(chalk.bold.cyan("ctx doctor"));
+        console.log(divider("\u2500", 50));
+        console.log();
+      }
 
       const results: CheckResult[] = [];
 
       // ----- Environment checks -----
-      console.log(chalk.bold("Environment"));
+      if (!json) console.log(chalk.bold("Environment"));
 
       // Load config FIRST so the key + connection checks can honour
       // ai.provider / ai.base_url instead of assuming Anthropic.
@@ -606,12 +614,14 @@ export function registerDoctorCommand(program: Command): void {
       results.push(checkCtxDirectory());
       results.push(checkApiKey(config));
 
-      const apiResult = await checkApiConnection(config);
+      const apiResult = await checkApiConnection(config, { silent: json });
       results.push(apiResult);
 
       // Print environment results
-      for (const r of results) {
-        console.log(`  ${icon(r.status)} ${r.label}: ${statusColor(r.status, r.message)}`);
+      if (!json) {
+        for (const r of results) {
+          console.log(`  ${icon(r.status)} ${r.label}: ${statusColor(r.status, r.message)}`);
+        }
       }
 
       if (config && projectRoot) {
@@ -626,11 +636,13 @@ export function registerDoctorCommand(program: Command): void {
         ];
 
         if (sourceResults.length > 0) {
-          console.log();
-          console.log(chalk.bold("Sources"));
+          if (!json) {
+            console.log();
+            console.log(chalk.bold("Sources"));
 
-          for (const r of sourceResults) {
-            console.log(`  ${icon(r.status)} ${r.label}: ${statusColor(r.status, r.message)}`);
+            for (const r of sourceResults) {
+              console.log(`  ${icon(r.status)} ${r.label}: ${statusColor(r.status, r.message)}`);
+            }
           }
 
           results.push(...sourceResults);
@@ -648,11 +660,13 @@ export function registerDoctorCommand(program: Command): void {
         if (deps) wikiResults.push(deps);
 
         if (wikiResults.length > 0) {
-          console.log();
-          console.log(chalk.bold("Wiki"));
+          if (!json) {
+            console.log();
+            console.log(chalk.bold("Wiki"));
 
-          for (const r of wikiResults) {
-            console.log(`  ${icon(r.status)} ${r.label}: ${statusColor(r.status, r.message)}`);
+            for (const r of wikiResults) {
+              console.log(`  ${icon(r.status)} ${r.label}: ${statusColor(r.status, r.message)}`);
+            }
           }
 
           results.push(...wikiResults);
@@ -660,12 +674,37 @@ export function registerDoctorCommand(program: Command): void {
       }
 
       // ----- Summary -----
-      console.log();
-      console.log(divider("\u2500", 50));
-
       const failCount = results.filter((r) => r.status === "fail").length;
       const warnCount = results.filter((r) => r.status === "warn").length;
       const passCount = results.filter((r) => r.status === "pass").length;
+
+      if (json) {
+        // Flat, scriptable payload. We strip ANSI out of `message`
+        // fields using a simple regex so downstream consumers (jq, CI
+        // logs, dashboards) don't get escape codes in their data.
+        const stripAnsi = (s: string): string =>
+          // eslint-disable-next-line no-control-regex
+          s.replace(/\u001b\[[0-9;]*m/g, "");
+        const payload = {
+          summary: {
+            pass: passCount,
+            warn: warnCount,
+            fail: failCount,
+          },
+          checks: results.map((r) => ({
+            label: r.label,
+            status: r.status,
+            message: stripAnsi(r.message),
+            ...(r.fix && { fix: r.fix }),
+          })),
+        };
+        console.log(JSON.stringify(payload, null, 2));
+        if (failCount > 0) process.exit(1);
+        return;
+      }
+
+      console.log();
+      console.log(divider("\u2500", 50));
 
       console.log(
         `  ${chalk.green(`${passCount} passed`)}` +

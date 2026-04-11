@@ -10,6 +10,7 @@ interface SearchOptions {
   limit?: string;
   threshold?: string;
   source?: string;
+  json?: boolean;
 }
 
 export function registerSearchCommand(program: Command): void {
@@ -25,8 +26,12 @@ export function registerSearchCommand(program: Command): void {
       "-s, --source <type>",
       "Filter by source type: wiki, source, memory"
     )
+    .option("--json", "Emit results as JSON (for scripts and agents)")
     .action(async (query: string, options: SearchOptions) => {
-      const spinner = ora("Searching...").start();
+      const json = options.json === true;
+      // In --json mode we must keep stdout clean — no spinner frames,
+      // no colour, no preamble. Scripts pipe this into jq.
+      const spinner = json ? null : ora("Searching...").start();
 
       try {
         const config = loadConfig();
@@ -34,7 +39,18 @@ export function registerSearchCommand(program: Command): void {
         const ctxDir = new CtxDirectory(projectRoot);
 
         if (!ctxDir.exists()) {
-          spinner.fail(
+          if (json) {
+            console.log(
+              JSON.stringify({
+                error: {
+                  code: "NO_CTX_DIR",
+                  message: "No .ctx/ directory found. Run 'ctx setup' first.",
+                },
+              })
+            );
+            process.exit(66);
+          }
+          spinner?.fail(
             chalk.red("No .ctx/ directory found. Run 'ctx setup' first.")
           );
           process.exit(1);
@@ -58,7 +74,26 @@ export function registerSearchCommand(program: Command): void {
           filter,
         });
 
-        spinner.stop();
+        spinner?.stop();
+
+        if (json) {
+          // Flat, script-friendly shape: one object per hit with the
+          // fields an agent actually needs (source path, score, section,
+          // full chunk content — NOT a preview, scripts deserve the
+          // full text).
+          const out = {
+            query,
+            count: results.length,
+            results: results.map((r) => ({
+              source: r.chunk.metadata.source,
+              score: r.score,
+              section: r.chunk.metadata.section ?? null,
+              content: r.chunk.content,
+            })),
+          };
+          console.log(JSON.stringify(out, null, 2));
+          return;
+        }
 
         if (results.length === 0) {
           console.log();
@@ -106,8 +141,17 @@ export function registerSearchCommand(program: Command): void {
           console.log();
         }
       } catch (error) {
-        spinner.fail(chalk.red("Search failed"));
-        if (error instanceof Error) {
+        spinner?.fail(chalk.red("Search failed"));
+        if (json) {
+          console.log(
+            JSON.stringify({
+              error: {
+                code: "SEARCH_FAILED",
+                message: error instanceof Error ? error.message : String(error),
+              },
+            })
+          );
+        } else if (error instanceof Error) {
           console.error(chalk.red(`  ${error.message}`));
         }
         process.exit(1);

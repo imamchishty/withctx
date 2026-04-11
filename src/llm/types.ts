@@ -23,6 +23,16 @@ export interface LLMMessage {
   content: string;
 }
 
+/**
+ * Handle returned by a streaming prompt. Callers iterate `textStream`
+ * to render tokens as they arrive, then await `finalResponse` for
+ * exact usage + model info.
+ */
+export interface LLMStreamHandle {
+  textStream: AsyncIterable<string>;
+  finalResponse: Promise<LLMResponse>;
+}
+
 export interface LLMProvider {
   name: string;
   prompt(text: string, options?: LLMOptions): Promise<LLMResponse>;
@@ -35,6 +45,12 @@ export interface LLMProvider {
     messages: LLMMessage[],
     options?: LLMOptions
   ): Promise<LLMResponse>;
+  /**
+   * Optional streaming variant. Providers that support server-sent
+   * events implement this; callers feature-detect and fall back to
+   * `prompt()` when it's absent.
+   */
+  promptStream?(text: string, options?: LLMOptions): LLMStreamHandle;
   analyzeImage?(
     imagePath: string,
     prompt: string,
@@ -57,4 +73,13 @@ export interface LLMConfig {
   apiKey?: string;
   baseUrl?: string;
   models?: Record<string, string>;
+  /**
+   * Extra HTTP headers attached to every provider request. Used for
+   * corporate / Azure-style endpoints whose auth scheme isn't
+   * `Authorization: Bearer`, or that need tenant / region routing headers.
+   *
+   * Populated from `ai.headers` in ctx.yaml; providers that accept a custom
+   * fetch/httpAgent forward these to the underlying SDK.
+   */
+  headers?: Record<string, string>;
 }

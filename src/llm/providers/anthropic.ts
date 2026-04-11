@@ -5,6 +5,7 @@ import type {
   LLMOptions,
   LLMMessage,
   LLMConfig,
+  LLMStreamHandle,
 } from "../types.js";
 
 /**
@@ -29,6 +30,7 @@ export class AnthropicProvider implements LLMProvider {
     this.client = new ClaudeClient(model, {
       baseURL: config?.baseUrl,
       ...(resolvedKey !== undefined && { apiKey: resolvedKey }),
+      ...(config?.headers && { defaultHeaders: config.headers }),
     });
   }
 
@@ -58,6 +60,20 @@ export class AnthropicProvider implements LLMProvider {
     });
 
     return this.toResponse(response);
+  }
+
+  promptStream(text: string, options?: LLMOptions): LLMStreamHandle {
+    const handle = this.client.promptStream(text, {
+      maxTokens: options?.maxTokens,
+      model: options?.model,
+      systemPrompt: options?.systemPrompt,
+      temperature: options?.temperature,
+      cacheSystemPrompt: options?.cacheSystemPrompt,
+    });
+    return {
+      textStream: handle.textStream,
+      finalResponse: handle.finalResponse.then((r) => this.toResponse(r)),
+    };
   }
 
   async conversation(

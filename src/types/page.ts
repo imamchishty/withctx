@@ -1,3 +1,5 @@
+import type { PageMetadata } from "../wiki/metadata.js";
+
 export interface WikiPage {
   path: string;
   title: string;
@@ -6,6 +8,11 @@ export interface WikiPage {
   updatedAt: string;
   sources: string[];
   references: string[];
+  /**
+   * Parsed `ctx` front-matter. Empty object when the page predates the
+   * freshness-header system or has no metadata block.
+   */
+  meta?: PageMetadata;
 }
 
 export interface IndexEntry {
@@ -23,7 +30,7 @@ export interface LogEntry {
 }
 
 export interface LintIssue {
-  type: "contradiction" | "stale" | "orphan" | "missing";
+  type: "contradiction" | "stale" | "orphan" | "missing" | "bless-drift" | "unblessed";
   severity: "warning" | "error";
   page: string;
   message: string;
@@ -40,6 +47,8 @@ export interface LintReport {
     stale: number;
     orphans: number;
     missing: number;
+    /** Pages blessed at an old git sha whose tree has since changed. */
+    blessDrift: number;
   };
 }
 

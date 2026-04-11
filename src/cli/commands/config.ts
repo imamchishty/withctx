@@ -1,12 +1,15 @@
 import { Command } from "commander";
 import chalk from "chalk";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { CtxConfigSchema } from "../../types/config.js";
 import { findConfigFile, loadConfig, getProjectRoot } from "../../config/loader.js";
 import { ConnectorRegistry } from "../../connectors/registry.js";
 import { LocalFilesConnector } from "../../connectors/local-files.js";
+import { safeResolve } from "../../security/paths.js";
+import { redactSecrets, isSensitiveConfigKey } from "../../security/redact.js";
+import { writeSecretFile } from "../../security/fs-modes.js";
 
 /**
  * Get a nested value from an object using dot notation.
@@ -123,12 +126,18 @@ async function showSourceStatus(config: ReturnType<typeof loadConfig>, projectRo
 
   const registry = new ConnectorRegistry();
 
-  // Register local sources
+  // Register local sources. safeResolve keeps the connector
+  // strictly inside the project root so a malicious ctx.yaml can't
+  // turn `ctx config sources` into an arbitrary-file-read primitive.
   if (config.sources?.local) {
     for (const source of config.sources.local) {
-      const resolvedPath = source.path.startsWith(".")
-        ? `${projectRoot}/${source.path}`
-        : source.path;
+      const resolvedPath = safeResolve(source.path, projectRoot);
+      if (resolvedPath === null) {
+        console.log(
+          `  ${chalk.red("FAIL")}  ${chalk.cyan(source.name)} (local) ${chalk.dim("— path escapes project root")}`
+        );
+        continue;
+      }
       registry.register(new LocalFilesConnector(source.name, resolvedPath));
     }
   }
@@ -185,10 +194,19 @@ export function registerConfigCommand(program: Command): void {
   });
 
   // ctx config get <key>
+  //
+  // We redact known secret shapes from the output, and for a small
+  // set of key NAMES (api_key, token, secret, password, *_token,
+  // *_secret, *_key) we refuse to print the raw value at all and
+  // show a masked form instead. The `--reveal` flag bypasses the
+  // guard for people who genuinely need to copy a token out — they
+  // have to opt in explicitly, so a casual `ctx config get
+  // ai.api_key` in a shared terminal can't leak via scrollback.
   configCmd
     .command("get <key>")
     .description("Get a specific config value (e.g., costs.budget)")
-    .action(async (key: string) => {
+    .option("--reveal", "Print secret values in full (opt-in, use with care)")
+    .action(async (key: string, options: { reveal?: boolean }) => {
       try {
         const configPath = findConfigFile();
         if (!configPath) {
@@ -205,10 +223,37 @@ export function registerConfigCommand(program: Command): void {
           process.exit(1);
         }
 
+        const sensitive = isSensitiveConfigKey(key);
+
+        // Render the value, then run it through the redactor as a
+        // defence-in-depth step (catches, e.g., a token that lives
+        // under an innocuously-named key).
+        let rendered: string;
         if (typeof value === "object" && value !== null) {
-          console.log(stringifyYaml(value as Record<string, unknown>).trim());
+          rendered = stringifyYaml(value as Record<string, unknown>).trim();
         } else {
-          console.log(String(value));
+          rendered = String(value);
+        }
+
+        if (sensitive && options.reveal !== true) {
+          // Key name itself screams "secret" — print a mask and
+          // nudge the user to opt-in if they really need the raw
+          // value.
+          const masked =
+            typeof value === "string" && value.length > 8
+              ? `${value.slice(0, 4)}…${value.slice(-4)}`
+              : "…";
+          console.log(masked);
+          console.error(
+            chalk.dim(
+              `  (redacted — pass --reveal to print the full value)`
+            )
+          );
+        } else {
+          // Always run the redactor even for non-sensitive keys:
+          // it catches the case where a user stuffed a token into
+          // a field we don't know about.
+          console.log(redactSecrets(rendered));
         }
       } catch (error) {
         console.error(chalk.red("Failed to get config value"));
@@ -247,9 +292,11 @@ export function registerConfigCommand(program: Command): void {
           process.exit(1);
         }
 
-        // Write back
+        // Write back with owner-only permissions — the file may
+        // hold secrets and we don't want group/world read access
+        // on shared machines.
         const yamlContent = stringifyYaml(parsed, { lineWidth: 120 });
-        writeFileSync(configPath, yamlContent);
+        writeSecretFile(configPath, yamlContent);
 
         console.log(chalk.green(`Set ${chalk.bold(key)} = ${chalk.cyan(String(parsedValue))}`));
       } catch (error) {

@@ -18,12 +18,29 @@ human-readable mirror.
 
 ```yaml
 project: my-project          # REQUIRED — display name used across the wiki
+refreshed_by: ci             # optional: "local" (default) | "ci"
 repos: [...]                 # git repos this wiki covers (metadata only)
 sources: {...}               # where to pull knowledge from
 costs: {...}                 # budget + default model (legacy)
 access: {...}                # redaction rules for sensitive content
 ai: {...}                    # LLM provider, model, base URL, per-op overrides
 ```
+
+### `refreshed_by`
+
+Controls who is allowed to refresh the wiki.
+
+- `"local"` (default) — anyone can run `ctx sync` / `ctx ingest`. The
+  ergonomic mode for a single developer or a repo where refresh is
+  cheap.
+- `"ci"` — local refresh is blocked. Only a CI job (typically the
+  GitHub Action dropped by `ctx publish`) should call `ctx sync`. A
+  developer who really needs to rebuild locally can pass
+  `--allow-local-refresh` — they'll see a cost warning showing the last
+  refresh time / cost and be asked to confirm.
+
+`ctx publish` sets `refreshed_by: ci` automatically. Setting it by hand
+in a non-published repo is fine too.
 
 Only `project` is required. Everything else is optional — `ctx setup`
 writes the minimal useful file and you add sections as you need them.
@@ -93,6 +110,34 @@ ai:
     query: claude-sonnet-4-20250514                    # default for interactive
     chat: claude-sonnet-4-20250514
     review: claude-sonnet-4-20250514
+
+  # Custom HTTP headers attached to every provider request. The escape
+  # hatch for corporate / Azure-style endpoints that authenticate with a
+  # header other than `Authorization: Bearer`, or that need tenant /
+  # region routing headers. Supports `${VAR}` interpolation so secrets
+  # stay in the environment.
+  headers:                                             # ⚠️  careful — may contain secrets
+    api-key: ${CORE42_API_KEY}                         # 🔒 never literal
+    x-tenant-id: acme-eu
+    x-ms-region: eu-west
+
+  # Custom pricing in USD per 1M tokens, keyed by model name. Overrides
+  # the built-in table so corporate / self-hosted / private models get
+  # (rough) cost tracking without touching source code. All fields
+  # optional; missing `cacheRead` / `cacheWrite` = not supported / zero.
+  #
+  # Don't sweat precision — these numbers power `ctx history` and cost
+  # warnings, not billing. Declaring something is better than leaving
+  # the resolver fall back to Sonnet pricing.
+  pricing:                                             # ✅ safe to commit
+    our-private-llama-3:
+      input: 0.10
+      output: 0.40
+    claude-sonnet-4:                                   # negotiated rate override
+      input: 2.50
+      output: 12.00
+      cacheRead: 0.25
+      cacheWrite: 3.00
 
 # ---------------------------------------------------------------------------
 # Sources — every connector the 1.x line supports

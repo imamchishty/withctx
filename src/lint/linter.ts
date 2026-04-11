@@ -74,6 +74,7 @@ export async function runLint(
       stale: allIssues.filter((i) => i.type === "stale").length,
       orphans: allIssues.filter((i) => i.type === "orphan").length,
       missing: allIssues.filter((i) => i.type === "missing").length,
+      blessDrift: allIssues.filter((i) => i.type === "bless-drift").length,
     },
   };
 

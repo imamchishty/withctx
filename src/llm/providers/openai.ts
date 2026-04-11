@@ -40,6 +40,10 @@ export class OpenAIProvider implements LLMProvider {
     this.client = new OpenAI({
       apiKey: resolvedKey,
       ...(config?.baseUrl && { baseURL: config.baseUrl }),
+      // ai.headers flows through to every request. Critical for corporate /
+      // Azure-style endpoints that authenticate with `api-key` instead of
+      // Bearer, or need tenant/region routing headers.
+      ...(config?.headers && { defaultHeaders: config.headers }),
     });
     // Track the effective base URL so `ctx doctor` can report traffic routing.
     this.baseURL =

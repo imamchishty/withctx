@@ -59,6 +59,12 @@ export interface ClaudeClientOptions {
   baseURL?: string;
   /** Override the API key (otherwise `ANTHROPIC_API_KEY` from env). */
   apiKey?: string;
+  /**
+   * Extra HTTP headers attached to every request. Used for corporate
+   * gateways that require tenant routing (`x-tenant-id`), regional pins,
+   * or non-Bearer auth schemes alongside the SDK's default.
+   */
+  defaultHeaders?: Record<string, string>;
 }
 
 /**
@@ -81,6 +87,9 @@ export class ClaudeClient {
     if (options?.baseURL) sdkOptions.baseURL = options.baseURL;
     const resolvedKey = process.env.ANTHROPIC_API_KEY ?? options?.apiKey;
     if (resolvedKey) sdkOptions.apiKey = resolvedKey;
+    if (options?.defaultHeaders && Object.keys(options.defaultHeaders).length > 0) {
+      sdkOptions.defaultHeaders = options.defaultHeaders;
+    }
 
     this.client = new Anthropic(sdkOptions);
     this.defaultModel = model;
@@ -177,6 +186,50 @@ export class ClaudeClient {
     });
 
     return this.formatResponse(response);
+  }
+
+  /**
+   * Stream a single-turn prompt. Returns an async iterable of text
+   * deltas plus a promise that resolves to the final response with
+   * usage data. Callers render deltas incrementally (e.g. to a TTY)
+   * then await `finalResponse` for token accounting.
+   *
+   * Streaming is best-effort — callers should feature-detect and fall
+   * back to `prompt()` if they need synchronous completion.
+   */
+  promptStream(
+    text: string,
+    options?: ClaudeOptions
+  ): { textStream: AsyncIterable<string>; finalResponse: Promise<ClaudeResponse> } {
+    const model = options?.model ?? this.defaultModel;
+    const systemParam = this.buildSystemParam(options);
+
+    const stream = this.client.messages.stream({
+      model,
+      max_tokens: options?.maxTokens ?? 4096,
+      ...(options?.temperature !== undefined && { temperature: options.temperature }),
+      ...(systemParam && { system: systemParam }),
+      messages: [{ role: "user", content: text }],
+    });
+
+    const self = this;
+    const textStream = (async function* (): AsyncGenerator<string> {
+      for await (const event of stream) {
+        if (
+          event.type === "content_block_delta" &&
+          "delta" in event &&
+          event.delta.type === "text_delta"
+        ) {
+          yield event.delta.text;
+        }
+      }
+    })();
+
+    const finalResponse = stream
+      .finalMessage()
+      .then((msg) => self.formatResponse(msg));
+
+    return { textStream, finalResponse };
   }
 
   /**
