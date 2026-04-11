@@ -1,11 +1,12 @@
 import { Command } from "commander";
 import chalk from "chalk";
 import ora from "ora";
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import { join, basename } from "node:path";
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { parse as parseYaml, stringify as yamlStringify } from "yaml";
 import { findConfigFile, getProjectRoot } from "../../config/loader.js";
+import { writeSecretFile } from "../../security/fs-modes.js";
 
 interface RepoAddOptions {
   branch?: string;
@@ -91,10 +92,47 @@ export function registerReposCommand(program: Command): void {
         // Clone the repo into .ctx/sources/
         const clonePath = join(projectRoot, ".ctx", "sources", repoName);
 
+        // Validate the URL up front. git's allowed schemes for remotes
+        // are http(s), ssh, git and file. We intentionally refuse
+        // `file://` and `ssh://` here — the CLI is a wiki builder, not
+        // a general-purpose git wrapper, and allowing those schemes
+        // would let a malicious ctx.yaml clone an arbitrary local path
+        // into .ctx/sources. The `git@` shorthand is allowed because
+        // it's the standard GitHub/GitLab SSH form; everything else
+        // must be explicit https://.
+        const urlOk =
+          /^https:\/\/[A-Za-z0-9._~:/?#[\]@!$&'()*+,;=%-]+$/.test(url) ||
+          /^git@[A-Za-z0-9._-]+:[A-Za-z0-9._/~-]+(\.git)?$/.test(url);
+        if (!urlOk) {
+          spinner.fail(
+            chalk.red(
+              `Refusing to clone: URL "${url}" is not a safe https:// or git@host:path form.`,
+            ),
+          );
+          process.exit(1);
+        }
+        // Branch name: git's refname rules are complex, so we enforce a
+        // conservative subset (alnum plus . _ / -). No spaces, no
+        // leading dash (which would otherwise be treated as a flag).
+        if (
+          options.branch !== undefined &&
+          !/^[A-Za-z0-9_][A-Za-z0-9._/-]*$/.test(options.branch)
+        ) {
+          spinner.fail(
+            chalk.red(
+              `Refusing to clone: branch "${options.branch}" contains unsafe characters.`,
+            ),
+          );
+          process.exit(1);
+        }
+
         if (existsSync(clonePath)) {
           spinner.text = `Repo directory exists — pulling latest...`;
           try {
-            execSync(`git -C "${clonePath}" pull --ff-only`, {
+            // argv form: git -C <path> pull --ff-only. No shell, so
+            // clonePath can contain any character and nothing is
+            // interpreted.
+            execFileSync("git", ["-C", clonePath, "pull", "--ff-only"], {
               stdio: "pipe",
               timeout: 60_000,
             });
@@ -103,15 +141,20 @@ export function registerReposCommand(program: Command): void {
           }
         } else {
           spinner.text = `Cloning ${url}...`;
-          const branchArg = options.branch ? `--branch ${options.branch}` : "";
+          // Build the argv list piece by piece. `--` terminates option
+          // parsing so even if the URL somehow started with `-` (it
+          // can't, after the regex check above) git would not treat
+          // it as a flag.
+          const cloneArgs = ["clone", "--depth", "1"];
+          if (options.branch) {
+            cloneArgs.push("--branch", options.branch);
+          }
+          cloneArgs.push("--", url, clonePath);
           try {
-            execSync(
-              `git clone --depth 1 ${branchArg} "${url}" "${clonePath}"`,
-              {
-                stdio: "pipe",
-                timeout: 120_000,
-              }
-            );
+            execFileSync("git", cloneArgs, {
+              stdio: "pipe",
+              timeout: 120_000,
+            });
           } catch (error) {
             spinner.fail(chalk.red(`Failed to clone: ${error instanceof Error ? error.message : String(error)}`));
             process.exit(1);
@@ -155,7 +198,7 @@ export function registerReposCommand(program: Command): void {
           });
         }
 
-        writeFileSync(configPath, yamlStringify(configData, { lineWidth: 120 }));
+        writeSecretFile(configPath, yamlStringify(configData, { lineWidth: 120 }));
 
         spinner.succeed(chalk.green(`Repository '${repoName}' cloned and registered`));
         console.log();
@@ -210,7 +253,7 @@ export function registerReposCommand(program: Command): void {
           }
         }
 
-        writeFileSync(configPath, yamlStringify(configData, { lineWidth: 120 }));
+        writeSecretFile(configPath, yamlStringify(configData, { lineWidth: 120 }));
         spinner.succeed(chalk.green(`Repo '${name}' unregistered`));
         console.log(chalk.dim("  Cloned files in .ctx/sources/ were not deleted."));
       } catch (error) {
