@@ -388,9 +388,10 @@ export class WikiCompiler {
           .toLowerCase()
           .replace(/[^a-z0-9]+/g, "-")
           .replace(/(^-|-$)/g, "");
+        const path = normalizePath(`${slug}.md`);
         pages.push({
-          path: `${slug}.md`,
-          content: response.trim(),
+          path,
+          content: sanitizeCompiledPage(path, response.trim()),
           isUpdate: false,
         });
       }
@@ -407,9 +408,10 @@ export class WikiCompiler {
       const content = response.slice(current.index, nextIndex).trim();
 
       if (content) {
+        const path = normalizePath(current.path);
         pages.push({
-          path: normalizePath(current.path),
-          content,
+          path,
+          content: sanitizeCompiledPage(path, content),
           isUpdate: current.type === "UPDATE",
         });
       }
@@ -591,11 +593,155 @@ export class WikiCompiler {
 /**
  * Normalize a page path to ensure consistency.
  */
+/**
+ * Front-matter keys that only the CLI is allowed to populate. If the
+ * LLM emits any of these (because a malicious source asked it to, or
+ * because the model hallucinated), we strip them before writing the
+ * page so a sneaky ingest can never spoof a human approval or trust
+ * tier. The system prompt also forbids emitting them — this is
+ * defence in depth on the output side.
+ */
+const RESERVED_FRONTMATTER_KEYS = new Set([
+  "blessed_by",
+  "blessed_at",
+  "blessed_at_sha",
+  "approved_by",
+  "approved_at",
+  "approved_at_sha",
+  "verified_at",
+  "verified_at_sha",
+  "unblessed",
+  "tier",
+]);
+
+/**
+ * Strip keys the LLM must never author from a YAML front-matter block.
+ * Returns the original text if no front-matter is present.
+ */
+function sanitizeFrontmatter(content: string): {
+  content: string;
+  stripped: string[];
+} {
+  const match = content.match(/^---\n([\s\S]*?)\n---\n?/);
+  if (!match) return { content, stripped: [] };
+
+  const body = match[1];
+  const stripped: string[] = [];
+  const keptLines: string[] = [];
+
+  for (const line of body.split("\n")) {
+    // Match "key:" at top level (no leading whitespace). Nested
+    // structures are preserved as-is because the key check only
+    // fires for top-level declarations.
+    const keyMatch = line.match(/^([a-zA-Z_][a-zA-Z0-9_]*)\s*:/);
+    if (keyMatch && RESERVED_FRONTMATTER_KEYS.has(keyMatch[1])) {
+      stripped.push(keyMatch[1]);
+      continue;
+    }
+    keptLines.push(line);
+  }
+
+  if (stripped.length === 0) return { content, stripped: [] };
+
+  const rebuilt = keptLines.join("\n").trim();
+  const newFrontmatter = rebuilt.length > 0 ? `---\n${rebuilt}\n---\n` : "";
+  return {
+    content: newFrontmatter + content.slice(match[0].length),
+    stripped,
+  };
+}
+
+/**
+ * Strip ```ctx-assert fenced blocks from LLM output. Assertions are
+ * part of the trust pipeline and must be authored by humans via
+ * `ctx teach` — never by the compiler. A malicious source that asks
+ * the LLM to inject an assertion could otherwise plant a command
+ * that runs during `ctx verify`.
+ */
+function stripCtxAssertBlocks(content: string): {
+  content: string;
+  stripped: number;
+} {
+  let stripped = 0;
+  const cleaned = content.replace(
+    /```ctx-assert\b[\s\S]*?```/g,
+    () => {
+      stripped++;
+      return "<!-- ctx-assert block removed during compilation: assertions must be authored by humans via `ctx teach` -->";
+    },
+  );
+  return { content: cleaned, stripped };
+}
+
+/**
+ * Sanitise a single compiled page. Called from parseCompilationResponse
+ * on every page the LLM returns, after the === PAGE: marker has been
+ * parsed but before the content is handed to the page writer. All
+ * mutations are logged to stderr so suspicious activity is visible
+ * in CI without polluting the user's terminal in normal runs.
+ */
+export function sanitizeCompiledPage(
+  pagePath: string,
+  content: string,
+): string {
+  let working = content;
+
+  const fm = sanitizeFrontmatter(working);
+  working = fm.content;
+
+  const assert = stripCtxAssertBlocks(working);
+  working = assert.content;
+
+  if (fm.stripped.length > 0 || assert.stripped > 0) {
+    const parts: string[] = [];
+    if (fm.stripped.length > 0) {
+      parts.push(`reserved front-matter keys: ${fm.stripped.join(", ")}`);
+    }
+    if (assert.stripped > 0) {
+      parts.push(`${assert.stripped} ctx-assert block(s)`);
+    }
+    process.stderr.write(
+      `[withctx] sanitised LLM output for ${pagePath}: stripped ${parts.join("; ")}\n`,
+    );
+  }
+
+  return working;
+}
+
+/**
+ * Normalise an LLM-provided page path into a safe relative path under
+ * `.ctx/context/`. Rejects anything that tries to escape the wiki
+ * root: absolute paths, `..` segments, device paths, URL schemes.
+ * Falls back to `manual/flagged-<hash>.md` if the input is too
+ * dangerous to repair. This is the last line of defence between the
+ * LLM and the filesystem writer.
+ */
 function normalizePath(path: string): string {
   let normalized = path.trim();
 
+  // Reject URL schemes and UNC prefixes outright.
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(normalized) || normalized.startsWith("\\\\")) {
+    process.stderr.write(
+      `[withctx] LLM returned path with scheme/UNC prefix (${path}) — redirecting to manual/flagged.md\n`,
+    );
+    return "manual/flagged.md";
+  }
+
   // Remove leading slashes
   normalized = normalized.replace(/^\/+/, "");
+  // Also strip Windows-style drive prefixes (C:\, D:/ etc.)
+  normalized = normalized.replace(/^[a-zA-Z]:[/\\]+/, "");
+
+  // Reject any `..` segment. An LLM that tries to write to
+  // `../../../etc/passwd` gets redirected to manual/ so a human can
+  // review what actually happened.
+  const segments = normalized.split(/[/\\]/);
+  if (segments.some((s) => s === "..")) {
+    process.stderr.write(
+      `[withctx] LLM returned path with .. segment (${path}) — redirecting to manual/flagged.md\n`,
+    );
+    return "manual/flagged.md";
+  }
 
   // Ensure .md extension
   if (!normalized.endsWith(".md")) {
@@ -603,8 +749,8 @@ function normalizePath(path: string): string {
   }
 
   // Replace spaces with hyphens and lowercase
-  normalized = normalized
-    .split("/")
+  normalized = segments
+    .filter((s) => s.length > 0 && s !== ".")
     .map((segment) =>
       segment === segment.toUpperCase() && segment.includes(".")
         ? segment // preserve filenames like README.md
@@ -614,6 +760,16 @@ function normalizePath(path: string): string {
             .replace(/[^a-z0-9._-]/g, "")
     )
     .join("/");
+
+  // Restore .md if the filter stripped the extension
+  if (!normalized.endsWith(".md")) {
+    normalized += ".md";
+  }
+
+  // Empty after filtering — everything was garbage.
+  if (normalized === ".md" || normalized === "") {
+    return "manual/flagged.md";
+  }
 
   return normalized;
 }

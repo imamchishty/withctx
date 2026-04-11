@@ -1,5 +1,83 @@
 import { z } from "zod";
 
+// --- URL safety ---
+//
+// SSRF guard for every `base_url` field in the config. A malicious
+// ctx.yaml (or a compromised upstream config) can otherwise point the
+// connector at `http://169.254.169.254/` (AWS instance metadata),
+// `file:///etc/passwd`, `http://127.0.0.1:9200/` (internal
+// Elasticsearch), etc.
+//
+// Policy:
+//   1. Scheme MUST be http or https. No `file://`, `ftp://`,
+//      `gopher://`, etc.
+//   2. Hostname MUST NOT be in a private or link-local range:
+//        - 127.0.0.0/8      (loopback)
+//        - 10.0.0.0/8       (RFC1918)
+//        - 172.16.0.0/12    (RFC1918)
+//        - 192.168.0.0/16   (RFC1918)
+//        - 169.254.0.0/16   (link-local, AWS/Azure/GCP metadata)
+//        - 0.0.0.0          (default route)
+//        - ::1, fc00::/7, fe80::/10 (IPv6 loopback, ULA, link-local)
+//        - localhost
+//
+// The only escape hatch is the `WITHCTX_ALLOW_PRIVATE_URLS=1` env
+// var, meant for local dev against a mock server — you have to
+// opt into it on every run, so it can't be set accidentally via
+// ctx.yaml or a checked-in file.
+function isPrivateHost(host: string): boolean {
+  const h = host.toLowerCase();
+  if (h === "localhost" || h === "" || h === "0.0.0.0") return true;
+  // IPv6 loopback / link-local / ULA
+  if (h === "::1" || h === "[::1]") return true;
+  if (h.startsWith("fc") || h.startsWith("fd")) return true; // ULA fc00::/7
+  if (h.startsWith("fe8") || h.startsWith("fe9") || h.startsWith("fea") || h.startsWith("feb")) {
+    return true; // link-local fe80::/10
+  }
+  // IPv4 private/link-local ranges
+  if (/^127\./.test(h)) return true;
+  if (/^10\./.test(h)) return true;
+  if (/^192\.168\./.test(h)) return true;
+  if (/^169\.254\./.test(h)) return true;
+  const m = h.match(/^172\.(\d+)\./);
+  if (m) {
+    const octet = Number(m[1]);
+    if (octet >= 16 && octet <= 31) return true;
+  }
+  return false;
+}
+
+const SafeHttpUrl = z
+  .string()
+  .url()
+  .refine(
+    (url) => {
+      try {
+        const parsed = new URL(url);
+        return parsed.protocol === "http:" || parsed.protocol === "https:";
+      } catch {
+        return false;
+      }
+    },
+    { message: "URL scheme must be http:// or https://" }
+  )
+  .refine(
+    (url) => {
+      if (process.env.WITHCTX_ALLOW_PRIVATE_URLS === "1") return true;
+      try {
+        const parsed = new URL(url);
+        return !isPrivateHost(parsed.hostname);
+      } catch {
+        return false;
+      }
+    },
+    {
+      message:
+        "URL points to a private / link-local address (loopback, RFC1918, AWS metadata). " +
+        "Set WITHCTX_ALLOW_PRIVATE_URLS=1 to override for local development.",
+    }
+  );
+
 // --- Source schemas ---
 
 const LocalSourceSchema = z.object({
@@ -9,7 +87,7 @@ const LocalSourceSchema = z.object({
 
 const JiraSourceSchema = z.object({
   name: z.string(),
-  base_url: z.string().url(),
+  base_url: SafeHttpUrl,
   email: z.string().email().optional(),
   token: z.string(),
   project: z.string().optional(),
@@ -27,7 +105,7 @@ const JiraSourceSchema = z.object({
 
 const ConfluenceSourceSchema = z.object({
   name: z.string(),
-  base_url: z.string().url(),
+  base_url: SafeHttpUrl,
   email: z.string().email().optional(),
   token: z.string(),
   space: z.union([z.string(), z.array(z.string())]).optional(),
@@ -103,7 +181,7 @@ const NotionSourceSchema = z.object({
   database_ids: z.array(z.string()).optional(),
   page_ids: z.array(z.string()).optional(),
   token: z.string().optional(),
-  base_url: z.string().url().optional(),
+  base_url: SafeHttpUrl.optional(),
 });
 
 const SlackSourceSchema = z.object({
@@ -111,7 +189,7 @@ const SlackSourceSchema = z.object({
   channels: z.array(z.string()),
   token: z.string().optional(),
   since: z.string().optional(),
-  base_url: z.string().url().optional(),
+  base_url: SafeHttpUrl.optional(),
 });
 
 const SourcesSchema = z.object({
@@ -162,6 +240,21 @@ const AccessSchema = z.object({
 
 // --- AI provider schema ---
 
+/**
+ * Per-model pricing in USD per 1M tokens. Supplied by users who run against
+ * corporate / private endpoints (Core42, Azure OpenAI, self-hosted vLLM, a
+ * model they fine-tuned internally) whose model names aren't in the built-in
+ * pricing table, or who have negotiated rates different from list price.
+ *
+ * Merged on top of the built-in table at startup via `setCustomPricing()`.
+ */
+const PricingEntrySchema = z.object({
+  input: z.number().nonnegative(),
+  output: z.number().nonnegative(),
+  cacheRead: z.number().nonnegative().optional(),
+  cacheWrite: z.number().nonnegative().optional(),
+});
+
 const AiSchema = z.object({
   provider: z.enum(["anthropic", "openai", "google", "ollama"]).default("anthropic"),
   model: z.string().optional(),
@@ -185,12 +278,60 @@ const AiSchema = z.object({
    */
   api_key: z.string().optional(),
   models: z.record(z.string()).optional(),
+  /**
+   * Custom HTTP headers attached to every request to the LLM provider.
+   * Needed for corporate / Azure-style endpoints that authenticate with
+   * `api-key` instead of `Authorization: Bearer`, or that require tenant
+   * routing headers like `x-ms-region`.
+   *
+   * Supports `${VAR}` interpolation so secrets can stay in the environment:
+   *   headers:
+   *     api-key: ${CORE42_API_KEY}
+   *     x-ms-region: eu-west
+   */
+  headers: z.record(z.string(), z.string()).optional(),
+  /**
+   * Custom pricing in USD per 1M tokens, keyed by model name. Overrides the
+   * built-in pricing table so corporate / self-hosted models get accurate
+   * cost tracking without touching source code.
+   *
+   *   pricing:
+   *     our-private-llama-3: { input: 0.1, output: 0.4 }
+   *     claude-sonnet-4:     { input: 2.5, output: 12 }   # negotiated rate
+   */
+  pricing: z.record(z.string(), PricingEntrySchema).optional(),
 });
 
 // --- Main config schema ---
 
 export const CtxConfigSchema = z.object({
+  /**
+   * Schema version. New configs always include this so future
+   * migrations can detect legacy files and upgrade them cleanly. The
+   * loader warns (but does not fail) when the field is missing.
+   *
+   * Current version: `"1.4"`. See `src/config/migrate.ts` for the
+   * upgrade path from earlier versions.
+   */
+  version: z.string().optional(),
   project: z.string(),
+  /**
+   * Who refreshes this wiki. Controls whether local `ctx ingest` /
+   * `ctx sync` are allowed, or whether refresh is reserved for CI.
+   *
+   * - `"local"` (default): anyone can refresh. The ergonomic default.
+   * - `"ci"`: local refresh is blocked unless the user passes
+   *   `--allow-local-refresh`. Use this on shared wiki repos where a
+   *   GitHub Action is the source of truth — prevents accidentally
+   *   burning LLM budget on a per-developer rebuild.
+   *
+   * Set by `ctx publish` when it scaffolds a CI-refreshed wiki. Users
+   * writing `ctx.yaml` by hand can also set it explicitly.
+   *
+   * Read out loud: "this wiki is refreshed by CI" — the name is meant
+   * to be obvious from a glance at the yaml, no docs needed.
+   */
+  refreshed_by: z.enum(["local", "ci"]).optional(),
   repos: z.array(RepoSchema).optional(),
   sources: SourcesSchema.optional(),
   costs: CostsSchema.optional(),

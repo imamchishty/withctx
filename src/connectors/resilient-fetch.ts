@@ -3,6 +3,32 @@
  * Drop-in replacement for native fetch() on API calls.
  */
 
+/**
+ * Default upper bound on the size of a single response body. 50 MB is
+ * well above any legitimate Jira/Confluence/GitHub JSON payload but
+ * comfortably below memory pressure. Callers that genuinely need more
+ * (e.g. fetching a large tarball) can raise it per-call.
+ */
+export const DEFAULT_MAX_BODY_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Thrown when a response body exceeds `maxBodyBytes`. We surface it as
+ * a distinct error class so callers can tell apart "server misbehaved"
+ * (MaxBodyExceededError) from "network glitch" (generic Error).
+ */
+export class MaxBodyExceededError extends Error {
+  readonly url: string;
+  readonly limit: number;
+  constructor(url: string, limit: number) {
+    super(
+      `Response body from ${url} exceeded ${limit} byte limit — refusing to read further to protect memory`,
+    );
+    this.name = "MaxBodyExceededError";
+    this.url = url;
+    this.limit = limit;
+  }
+}
+
 export interface ResilientFetchOptions {
   /** Maximum number of retry attempts. Default: 3 */
   maxRetries?: number;
@@ -16,6 +42,14 @@ export interface ResilientFetchOptions {
   timeout?: number;
   /** Optional callback fired before each retry. */
   onRetry?: (attempt: number, error: Error, delayMs: number) => void;
+  /**
+   * Maximum body size in bytes. If the server advertises a larger
+   * Content-Length we refuse the response without reading the body.
+   * Default: 50 MB. Use {@link readBodyWithLimit} to enforce the same
+   * cap when you actually read the body (handles chunked/streamed
+   * responses that omit Content-Length).
+   */
+  maxBodyBytes?: number;
 }
 
 /** HTTP status codes that are safe to retry. */
@@ -37,6 +71,7 @@ export async function resilientFetch(
   const maxDelay = options?.maxDelay ?? 30_000;
   const timeout = options?.timeout ?? 30_000;
   const rateLimitHeader = options?.rateLimitHeader?.toLowerCase();
+  const maxBodyBytes = options?.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
 
   let lastError: Error | undefined;
 
@@ -69,6 +104,25 @@ export async function resilientFetch(
       clearTimeout(timeoutId);
       if (callerSignal && onCallerAbort) {
         callerSignal.removeEventListener("abort", onCallerAbort);
+      }
+
+      // Refuse oversized responses before the caller touches .text()/.json().
+      // This is a fast-path check against the server-advertised Content-Length.
+      // A malicious or misconfigured server can omit the header; callers that
+      // read the body should additionally use readBodyWithLimit() to enforce
+      // the same cap on streamed responses.
+      const contentLength = response.headers.get("content-length");
+      if (contentLength) {
+        const declared = Number(contentLength);
+        if (Number.isFinite(declared) && declared > maxBodyBytes) {
+          // Drain and discard the body so the connection can be reused.
+          try {
+            await response.body?.cancel();
+          } catch {
+            /* ignore cancel errors */
+          }
+          throw new MaxBodyExceededError(String(url), maxBodyBytes);
+        }
       }
 
       // Success — return immediately
@@ -115,6 +169,13 @@ export async function resilientFetch(
       clearTimeout(timeoutId);
       if (callerSignal && onCallerAbort) {
         callerSignal.removeEventListener("abort", onCallerAbort);
+      }
+
+      // Oversized body is a deterministic safety guard — retrying would
+      // just make the same bad server send the same oversized response.
+      // Propagate immediately so the caller can surface it to the user.
+      if (error instanceof MaxBodyExceededError) {
+        throw error;
       }
 
       // Abort from timeout
@@ -250,4 +311,86 @@ function jitter(): number {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Read a Response body as text, enforcing a hard byte cap.
+ *
+ * The Content-Length pre-check in {@link resilientFetch} catches
+ * servers that advertise oversized payloads, but a malicious or
+ * misconfigured server can omit the header and then stream forever.
+ * This helper reads the body chunk by chunk, aborts as soon as the
+ * cumulative size exceeds `maxBytes`, and cancels the underlying
+ * stream so the socket can be reused.
+ *
+ * Usage:
+ *   const res = await resilientFetch(url, init, { maxBodyBytes });
+ *   const text = await readBodyWithLimit(res, maxBodyBytes, url);
+ *   const json = JSON.parse(text);
+ */
+export async function readBodyWithLimit(
+  response: Response,
+  maxBytes: number = DEFAULT_MAX_BODY_BYTES,
+  urlForError?: string,
+): Promise<string> {
+  const label = urlForError ?? response.url ?? "<response>";
+
+  // Fast path: re-check Content-Length in case the caller bypassed
+  // resilientFetch or raised the cap between call and read.
+  const contentLength = response.headers.get("content-length");
+  if (contentLength) {
+    const declared = Number(contentLength);
+    if (Number.isFinite(declared) && declared > maxBytes) {
+      try {
+        await response.body?.cancel();
+      } catch {
+        /* ignore */
+      }
+      throw new MaxBodyExceededError(label, maxBytes);
+    }
+  }
+
+  if (!response.body) {
+    // Some runtimes (mocked Response) don't expose a stream. Fall
+    // back to .text() but still enforce the cap afterwards.
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf-8") > maxBytes) {
+      throw new MaxBodyExceededError(label, maxBytes);
+    }
+    return text;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  const chunks: string[] = [];
+  let total = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (value) {
+        total += value.byteLength;
+        if (total > maxBytes) {
+          try {
+            await reader.cancel();
+          } catch {
+            /* ignore */
+          }
+          throw new MaxBodyExceededError(label, maxBytes);
+        }
+        chunks.push(decoder.decode(value, { stream: true }));
+      }
+    }
+    // Flush any buffered multi-byte sequences.
+    chunks.push(decoder.decode());
+  } finally {
+    try {
+      reader.releaseLock();
+    } catch {
+      /* already released */
+    }
+  }
+
+  return chunks.join("");
 }
