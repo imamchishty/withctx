@@ -106,7 +106,7 @@ describe('loadConfig', () => {
     expect(config.sources?.jira?.[0].token).toBe('');
   });
 
-  it('resolves env vars in nested objects and arrays', () => {
+  it('resolves env vars in nested credential fields', () => {
     const configPath = join(tempDir, 'ctx.yaml');
     const originalEnv = process.env.WITHCTX_TEST_NESTED;
     process.env.WITHCTX_TEST_NESTED = 'resolved-value';
@@ -116,19 +116,77 @@ describe('loadConfig', () => {
       [
         'project: test-nested',
         'sources:',
-        '  local:',
-        '    - name: ${WITHCTX_TEST_NESTED}',
-        '      path: /tmp/test',
+        '  jira:',
+        '    - name: my-jira',
+        '      base_url: https://jira.example.com',
+        '      token: ${WITHCTX_TEST_NESTED}',
+        '      project: PROJ',
       ].join('\n')
     );
 
     const config = loadConfig(configPath);
-    expect(config.sources?.local?.[0].name).toBe('resolved-value');
+    expect(config.sources?.jira?.[0].token).toBe('resolved-value');
 
     if (originalEnv === undefined) {
       delete process.env.WITHCTX_TEST_NESTED;
     } else {
       process.env.WITHCTX_TEST_NESTED = originalEnv;
+    }
+  });
+
+  it('rejects ${VAR} placeholders in non-credential fields (security)', () => {
+    const configPath = join(tempDir, 'ctx.yaml');
+    // A malicious / careless config tries to smuggle an env var into a
+    // filesystem path. The loader must refuse, not silently substitute.
+    writeFileSync(
+      configPath,
+      [
+        'project: test-leak',
+        'sources:',
+        '  local:',
+        '    - name: leaky',
+        '      path: /tmp/${ANTHROPIC_API_KEY}',
+      ].join('\n')
+    );
+
+    expect(() => loadConfig(configPath)).toThrow(
+      /environment-variable interpolation is only allowed/
+    );
+  });
+
+  it('rejects ${VAR} placeholders in project name', () => {
+    const configPath = join(tempDir, 'ctx.yaml');
+    writeFileSync(configPath, 'project: ${ANTHROPIC_API_KEY}\n');
+    expect(() => loadConfig(configPath)).toThrow(
+      /environment-variable interpolation is only allowed/
+    );
+  });
+
+  it('allows ${VAR} in ai.headers child values', () => {
+    const configPath = join(tempDir, 'ctx.yaml');
+    const originalEnv = process.env.WITHCTX_TEST_HEADER;
+    process.env.WITHCTX_TEST_HEADER = 'header-secret-value';
+
+    writeFileSync(
+      configPath,
+      [
+        'project: test-headers',
+        'ai:',
+        '  provider: anthropic',
+        '  headers:',
+        '    api-key: ${WITHCTX_TEST_HEADER}',
+        '    x-ms-region: eu-west',
+      ].join('\n')
+    );
+
+    const config = loadConfig(configPath);
+    expect(config.ai?.headers?.['api-key']).toBe('header-secret-value');
+    expect(config.ai?.headers?.['x-ms-region']).toBe('eu-west');
+
+    if (originalEnv === undefined) {
+      delete process.env.WITHCTX_TEST_HEADER;
+    } else {
+      process.env.WITHCTX_TEST_HEADER = originalEnv;
     }
   });
 });
