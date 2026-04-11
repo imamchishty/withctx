@@ -51,10 +51,76 @@ interface ConfluenceSearchResponse {
 }
 
 /**
+ * Normalize a Confluence base_url so the rest of the connector can
+ * always append plain `/rest/api/...` paths and have them resolve.
+ *
+ * Confluence has two deployment shapes and they use DIFFERENT URL
+ * layouts:
+ *
+ *   Cloud (*.atlassian.net):
+ *     Every REST endpoint lives under `/wiki/rest/api/...`.
+ *     A user who sets `base_url: https://acme.atlassian.net` will hit
+ *     404s on every call — the connector would build
+ *     `https://acme.atlassian.net/rest/api/content/search` which is
+ *     outside the wiki mount point.
+ *
+ *   Server / Data Center (self-hosted):
+ *     Endpoints live at the root: `/rest/api/...`.
+ *     A user who sets `base_url: https://confluence.acme.internal`
+ *     is already correct — adding `/wiki` would break it.
+ *
+ * We detect Cloud by hostname (`*.atlassian.net`) and, when the
+ * user hasn't already included `/wiki`, append it. The heuristic
+ * is narrow on purpose: we don't want to rewrite custom domains or
+ * non-cloud hosts, so any host that isn't `atlassian.net` is left
+ * alone and treated as Server/DC.
+ *
+ * Trailing slashes are stripped so `resilientFetch` doesn't end up
+ * with `//rest/api/...` in the path.
+ */
+export function normalizeConfluenceBaseUrl(raw: string): string {
+  const trimmed = raw.replace(/\/$/, "");
+
+  // Try to parse as a URL so we can read the hostname cleanly.
+  // If the input isn't URL-shaped (shouldn't happen — SafeHttpUrl has
+  // already validated it), fall back to the original string.
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return trimmed;
+  }
+
+  const isCloud = /(^|\.)atlassian\.net$/i.test(parsed.hostname);
+  if (!isCloud) return trimmed;
+
+  // User already put /wiki in the path (or deeper) — leave it alone.
+  const path = parsed.pathname.replace(/\/$/, "");
+  if (path === "/wiki" || path.startsWith("/wiki/")) return trimmed;
+
+  // Cloud host with no /wiki prefix → append it. Preserve the origin.
+  return `${parsed.origin}/wiki`;
+}
+
+/**
  * Connector for Confluence.
  * Uses Atlassian REST API (fetch-based).
  * Supports spaces, specific pages, labels, page trees.
  * Converts Confluence storage format to markdown.
+ *
+ * Supports BOTH deployment modes:
+ *
+ *   Cloud (*.atlassian.net) — Basic auth via `email + token` (API token
+ *     from id.atlassian.com). base_url is auto-normalized to include
+ *     the `/wiki` mount point if the user forgot it.
+ *
+ *   Server / Data Center — Bearer auth via PAT in `token` (no email).
+ *     Endpoints live at the host root, e.g.
+ *     `https://confluence.acme.internal/rest/api/...`.
+ *
+ * The auth mode is picked automatically by the presence of `email`
+ * in the source config: email set → Basic (Cloud), email absent →
+ * Bearer (Server/DC).
  */
 export class ConfluenceConnector implements SourceConnector {
   readonly type = "confluence" as const;
@@ -74,7 +140,7 @@ export class ConfluenceConnector implements SourceConnector {
 
   constructor(config: ConfluenceSource) {
     this.name = config.name;
-    this.baseUrl = config.base_url.replace(/\/$/, "");
+    this.baseUrl = normalizeConfluenceBaseUrl(config.base_url);
     this.email = config.email;
     this.token = config.token;
     // Support both single space string and array of spaces

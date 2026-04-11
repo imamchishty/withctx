@@ -50,6 +50,21 @@ interface JiraSearchResponse {
  * Connector for Jira.
  * Uses Atlassian REST API v2 (fetch-based, no SDK).
  * Supports JQL queries, project/epic/component filtering.
+ *
+ * Supports BOTH deployment modes:
+ *
+ *   Cloud (*.atlassian.net) — Basic auth via `email + token` (API token
+ *     from id.atlassian.com). Uses `/rest/api/2/...` paths — Cloud also
+ *     exposes v3 but v2 is a stable superset for the fields we read.
+ *
+ *   Server / Data Center — Bearer auth via PAT in `token` (no email).
+ *     Uses the same `/rest/api/2/...` paths, so the only branching is
+ *     the auth header.
+ *
+ * The auth mode is picked automatically by the presence of `email`
+ * in the source config: email set → Basic (Cloud), email absent →
+ * Bearer (Server/DC). Unlike Confluence, there is no base_url path
+ * difference between the two deployments — both use the host root.
  */
 export class JiraConnector implements SourceConnector {
   readonly type = "jira" as const;

@@ -128,4 +128,97 @@ describe("JiraConnector (mock server)", () => {
     expect(alpha1!.content).toContain("**Priority:** High");
     expect(alpha1!.url).toBe(`${server.url}/browse/ALPHA-1`);
   });
+
+  it("fetch() sends Basic auth header when email+token are provided (Cloud)", async () => {
+    const connector = new JiraConnector(makeConfig({ project: "ALPHA" }));
+    await collect(connector.fetch());
+
+    // First recorded call should be the search GET with Basic auth.
+    const searchCall = server.requests.find((r) => r.path.startsWith("/rest/api/2/search"));
+    expect(searchCall).toBeDefined();
+    const authHeader = searchCall!.headers["authorization"];
+    expect(authHeader).toBeDefined();
+    expect(authHeader.startsWith("Basic ")).toBe(true);
+    const decoded = Buffer.from(authHeader.substring(6), "base64").toString("utf8");
+    expect(decoded).toBe("alice@example.com:secret-token");
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// On-prem (Jira Server / Data Center) — Bearer auth, no email
+// ──────────────────────────────────────────────────────────────────────
+//
+// Jira Server/DC uses a Personal Access Token in a Bearer header. The
+// connector picks this branch when `email` is absent from the config.
+// The URL layout is identical to Cloud (/rest/api/2/...), so the only
+// thing this suite proves is that the auth branch works end-to-end
+// against a live HTTP socket — no auth header mutation, no accidental
+// fallthrough to Basic with an empty username.
+describe("JiraConnector (on-prem / Server / Data Center)", () => {
+  let server: MockServer;
+
+  beforeAll(async () => {
+    server = await startMockServer(buildJiraRoutes());
+  });
+
+  afterAll(async () => {
+    await server.close();
+  });
+
+  beforeEach(() => {
+    server.reset();
+  });
+
+  it("sends Bearer auth when email is absent", async () => {
+    const connector = new JiraConnector({
+      name: "onprem-jira",
+      base_url: server.url,
+      token: "onprem-pat",
+      project: "ALPHA",
+    } as JiraSource);
+
+    const ok = await connector.validate();
+    expect(ok).toBe(true);
+
+    const myselfCall = server.requests.find((r) => r.path === "/rest/api/2/myself");
+    expect(myselfCall).toBeDefined();
+    expect(myselfCall!.headers["authorization"]).toBe("Bearer onprem-pat");
+  });
+
+  it("fetch() pulls issues using the same /rest/api/2 layout as Cloud", async () => {
+    const connector = new JiraConnector({
+      name: "onprem-jira",
+      base_url: server.url,
+      token: "onprem-pat",
+      project: "ALPHA",
+    } as JiraSource);
+
+    const docs = await collect(connector.fetch());
+    const keys = docs.map((d) => d.metadata.key as string).sort();
+    expect(keys).toEqual(["ALPHA-1", "ALPHA-2", "ALPHA-3"]);
+
+    // Every recorded call must carry the Bearer header — no silent
+    // fallthrough to Basic auth with an empty username.
+    const calls = server.requests.filter((r) => r.path.startsWith("/rest/api/2/"));
+    expect(calls.length).toBeGreaterThan(0);
+    for (const call of calls) {
+      expect(call.headers["authorization"]).toBe("Bearer onprem-pat");
+    }
+  });
+
+  it("validate() returns false when the PAT is rejected", async () => {
+    const failing = await startMockServer(buildJiraRoutes({ myselfStatus: 401 }));
+    try {
+      const connector = new JiraConnector({
+        name: "onprem-bad",
+        base_url: failing.url,
+        token: "bad-pat",
+      } as JiraSource);
+      const result = await connector.validate();
+      expect(result).toBe(false);
+      expect(connector.getStatus().status).toBe("error");
+    } finally {
+      await failing.close();
+    }
+  });
 });

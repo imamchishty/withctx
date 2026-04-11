@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
-import { ConfluenceConnector } from "../src/connectors/confluence.js";
+import {
+  ConfluenceConnector,
+  normalizeConfluenceBaseUrl,
+} from "../src/connectors/confluence.js";
 import type { ConfluenceSource } from "../src/types/config.js";
 import type { RawDocument } from "../src/types/source.js";
 import { startMockServer, MockServer } from "./helpers/mock-server.js";
@@ -189,5 +192,163 @@ describe("ConfluenceConnector (mock server)", () => {
     expect(runbook!.url).toContain(server.url);
     expect(runbook!.sourceType).toBe("confluence");
     expect(runbook!.sourceName).toBe("test-confluence");
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// normalizeConfluenceBaseUrl — unit tests for the Cloud /wiki heuristic
+// ──────────────────────────────────────────────────────────────────────
+describe("normalizeConfluenceBaseUrl", () => {
+  it("appends /wiki to an atlassian.net host without a path", () => {
+    expect(normalizeConfluenceBaseUrl("https://acme.atlassian.net")).toBe(
+      "https://acme.atlassian.net/wiki"
+    );
+  });
+
+  it("strips trailing slash before appending /wiki", () => {
+    expect(normalizeConfluenceBaseUrl("https://acme.atlassian.net/")).toBe(
+      "https://acme.atlassian.net/wiki"
+    );
+  });
+
+  it("leaves atlassian.net URLs that already include /wiki alone", () => {
+    expect(normalizeConfluenceBaseUrl("https://acme.atlassian.net/wiki")).toBe(
+      "https://acme.atlassian.net/wiki"
+    );
+    expect(
+      normalizeConfluenceBaseUrl("https://acme.atlassian.net/wiki/")
+    ).toBe("https://acme.atlassian.net/wiki");
+  });
+
+  it("leaves atlassian.net URLs with deeper /wiki/... paths alone", () => {
+    expect(
+      normalizeConfluenceBaseUrl("https://acme.atlassian.net/wiki/spaces/ENG")
+    ).toBe("https://acme.atlassian.net/wiki/spaces/ENG");
+  });
+
+  it("does not touch a Server / Data Center hostname", () => {
+    expect(
+      normalizeConfluenceBaseUrl("https://confluence.acme.internal")
+    ).toBe("https://confluence.acme.internal");
+    expect(
+      normalizeConfluenceBaseUrl("https://confluence.acme.internal/")
+    ).toBe("https://confluence.acme.internal");
+    expect(
+      normalizeConfluenceBaseUrl("https://confluence.acme.internal/custom-base")
+    ).toBe("https://confluence.acme.internal/custom-base");
+  });
+
+  it("is case-insensitive on the atlassian.net suffix", () => {
+    // Node's URL parser lowercases the hostname in `origin`, so the
+    // output is normalised to the canonical lowercase form — the
+    // point of this test is to prove that an upper-case input still
+    // gets the `/wiki` prefix appended, not that case is preserved.
+    expect(normalizeConfluenceBaseUrl("https://Acme.Atlassian.Net")).toBe(
+      "https://acme.atlassian.net/wiki"
+    );
+  });
+
+  it("leaves malformed URLs unchanged (SafeHttpUrl should have caught them earlier)", () => {
+    expect(normalizeConfluenceBaseUrl("not a url")).toBe("not a url");
+  });
+
+  it("does not match a lookalike host like atlassian.net.evil.com", () => {
+    // The heuristic must anchor the suffix, otherwise a typosquat
+    // `acme.atlassian.net.evil.com` would be treated as Cloud and
+    // silently have `/wiki` appended.
+    expect(normalizeConfluenceBaseUrl("https://acme.atlassian.net.evil.com")).toBe(
+      "https://acme.atlassian.net.evil.com"
+    );
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────
+// Confluence Cloud — /wiki-prefixed layout
+// ──────────────────────────────────────────────────────────────────────
+//
+// Confluence Cloud mounts every REST endpoint under /wiki/rest/api/...
+// The mock server is started with `pathPrefix: "/wiki"` so every route
+// lives at that prefix. If the connector forgets to normalize the
+// base_url, the requests land on the plain /rest/api/... routes which
+// don't exist and return 404, and the assertions below fail loudly.
+describe("ConfluenceConnector (Cloud / *.atlassian.net)", () => {
+  let server: MockServer;
+
+  beforeAll(async () => {
+    server = await startMockServer(buildConfluenceRoutes({ pathPrefix: "/wiki" }));
+  });
+
+  afterAll(async () => {
+    await server.close();
+  });
+
+  beforeEach(() => {
+    server.reset();
+  });
+
+  // We can't literally point the connector at `https://acme.atlassian.net`
+  // in a test (no network) — instead we hand it the mock server URL with
+  // `/wiki` already appended, which is exactly what the normalizer
+  // would have produced. A separate test above already proves the
+  // normalizer turns the user-friendly bare hostname into this form.
+  function cloudConfig(overrides: Partial<ConfluenceSource> = {}): ConfluenceSource {
+    return {
+      name: "cloud-confluence",
+      base_url: `${server.url}/wiki`,
+      email: "alice@example.com",
+      token: "cloud-token",
+      ...overrides,
+    } as ConfluenceSource;
+  }
+
+  it("validate() succeeds against /wiki/rest/api/user/current", async () => {
+    const connector = new ConfluenceConnector(cloudConfig({ space: "ENG" }));
+    const ok = await connector.validate();
+    expect(ok).toBe(true);
+
+    const call = server.requests.find((r) =>
+      r.path.startsWith("/wiki/rest/api/user/current")
+    );
+    expect(call).toBeDefined();
+    // Sanity: the connector did NOT fall back to /rest/api/... without /wiki.
+    const nonWikiCalls = server.requests.filter((r) =>
+      r.path.startsWith("/rest/api/")
+    );
+    expect(nonWikiCalls.length).toBe(0);
+  });
+
+  it("fetch() hits /wiki/rest/api/content/search with Basic auth", async () => {
+    const connector = new ConfluenceConnector(cloudConfig({ space: "ENG" }));
+    const docs = await collect(connector.fetch());
+
+    expect(docs.length).toBeGreaterThan(0);
+
+    const searchCall = server.requests.find((r) =>
+      r.path.startsWith("/wiki/rest/api/content/search"),
+    );
+    expect(searchCall).toBeDefined();
+    const auth = searchCall!.headers["authorization"];
+    expect(auth).toBeDefined();
+    expect(auth.startsWith("Basic ")).toBe(true);
+    const decoded = Buffer.from(auth.substring(6), "base64").toString("utf8");
+    expect(decoded).toBe("alice@example.com:cloud-token");
+  });
+
+  it("accepts a base_url that was already normalized by the constructor", () => {
+    // The constructor calls normalizeConfluenceBaseUrl — we can observe
+    // this indirectly by confirming that a bare atlassian.net input
+    // turns into something that would resolve against the /wiki mock.
+    const c = new ConfluenceConnector({
+      name: "cloud-bare",
+      base_url: "https://acme.atlassian.net",
+      email: "alice@example.com",
+      token: "t",
+      space: "ENG",
+    } as ConfluenceSource);
+    // Private field — reach into the instance for the test. Reasonable
+    // because this is the one invariant we want to pin down.
+    expect((c as unknown as { baseUrl: string }).baseUrl).toBe(
+      "https://acme.atlassian.net/wiki"
+    );
   });
 });
