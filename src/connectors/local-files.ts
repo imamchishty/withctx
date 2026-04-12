@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, existsSync, lstatSync } from "node:fs";
+import { readdirSync, readFileSync, existsSync, lstatSync, type Stats } from "node:fs";
 import { join, relative, extname, basename, resolve, sep } from "node:path";
 import type { SourceConnector } from "./types.js";
 import type { RawDocument, FetchOptions, SourceStatus } from "../types/source.js";
@@ -36,6 +36,22 @@ const IGNORE_DIRS = new Set([
   "node_modules", ".git", "dist", "build", ".next",
   "__pycache__", ".venv", "venv", "target",
   ".ctx", ".turbo", "coverage",
+]);
+
+/**
+ * Binary document extensions that the local connector can parse via
+ * dynamic imports. When the walker encounters one of these, it routes
+ * through the dedicated parser (pdf-parse, mammoth, xlsx, jszip)
+ * instead of trying to read the file as UTF-8 text.
+ *
+ * Dynamic imports so projects without binary docs don't pay the
+ * startup cost.
+ */
+const BINARY_DOC_EXTENSIONS = new Set([
+  ".pdf",
+  ".docx", ".doc",
+  ".xlsx", ".xls", ".csv",
+  ".pptx", ".ppt",
 ]);
 
 /**
@@ -104,7 +120,8 @@ export class LocalFilesConnector implements SourceConnector {
         }
 
         const ext = extname(filePath).toLowerCase();
-        if (!TEXT_EXTENSIONS.has(ext) && ext !== "") continue;
+        const isBinaryDoc = BINARY_DOC_EXTENSIONS.has(ext);
+        if (!TEXT_EXTENSIONS.has(ext) && !isBinaryDoc && ext !== "") continue;
 
         // Skip files without extension that aren't known names
         const name = basename(filePath);
@@ -112,8 +129,33 @@ export class LocalFilesConnector implements SourceConnector {
           continue;
         }
 
-        const content = readFileSync(filePath, "utf-8");
         const relativePath = relative(canonicalBase, filePath);
+
+        // ── Binary documents (PDF, Word, Excel, PowerPoint) ─────
+        //
+        // Route through the dedicated parser via dynamic import so
+        // projects without binary docs don't pay the startup cost.
+        // If the parser throws (missing dep, corrupt file), we
+        // skip the file and keep going — one bad PDF shouldn't
+        // kill the whole ingest.
+        if (isBinaryDoc) {
+          try {
+            const doc = await this.parseBinaryDocument(filePath, relativePath, ext, stat);
+            if (doc) {
+              count++;
+              yield doc;
+            }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            process.stderr.write(
+              `[withctx] skipping ${relativePath}: ${msg}\n`,
+            );
+          }
+          if (options?.limit && count >= options.limit) break;
+          continue;
+        }
+
+        const content = readFileSync(filePath, "utf-8");
 
         // Process markdown files through the smart parser
         if (ext === ".md") {
@@ -228,6 +270,128 @@ export class LocalFilesConnector implements SourceConnector {
         yield fullPath;
       }
     }
+  }
+
+  /**
+   * Parse a binary document (PDF, Word, Excel, PowerPoint) via dynamic
+   * import. Returns a RawDocument or null if the content is empty.
+   *
+   * Dynamic imports keep startup fast — projects without binary docs
+   * never load mammoth, xlsx, pdf-parse, or jszip.
+   */
+  private async parseBinaryDocument(
+    filePath: string,
+    relativePath: string,
+    ext: string,
+    stat: Stats,
+  ): Promise<RawDocument | null> {
+    let content: string;
+
+    switch (ext) {
+      // ── PDF ──────────────────────────────────────────────────────
+      case ".pdf": {
+        const pdfParse = (await import("pdf-parse")).default;
+        const buffer = readFileSync(filePath);
+        const result = await pdfParse(buffer);
+        content = result.text;
+        break;
+      }
+
+      // ── Word (.docx / .doc) ──────────────────────────────────────
+      case ".docx":
+      case ".doc": {
+        const mammoth = await import("mammoth");
+        const result = await mammoth.default.extractRawText({ path: filePath });
+        content = result.value;
+        break;
+      }
+
+      // ── Excel (.xlsx / .xls) ─────────────────────────────────────
+      case ".xlsx":
+      case ".xls": {
+        const XLSX = (await import("xlsx")).default ?? (await import("xlsx"));
+        const workbook = XLSX.readFile(filePath);
+        const sheets: string[] = [];
+
+        for (const sheetName of workbook.SheetNames) {
+          const sheet = workbook.Sheets[sheetName];
+          const data: string[][] = XLSX.utils.sheet_to_json(sheet, { header: 1 });
+          if (data.length === 0) continue;
+
+          let table = `### ${sheetName}\n\n`;
+          const headers = data[0].map(String);
+          table += `| ${headers.join(" | ")} |\n`;
+          table += `| ${headers.map(() => "---").join(" | ")} |\n`;
+
+          for (let i = 1; i < data.length && i < 500; i++) {
+            const row = data[i].map(String);
+            table += `| ${row.join(" | ")} |\n`;
+          }
+
+          sheets.push(table);
+        }
+
+        content = sheets.join("\n\n");
+        break;
+      }
+
+      // ── CSV ──────────────────────────────────────────────────────
+      case ".csv": {
+        content = readFileSync(filePath, "utf-8");
+        break;
+      }
+
+      // ── PowerPoint (.pptx / .ppt) ───────────────────────────────
+      case ".pptx":
+      case ".ppt": {
+        const JSZip = (await import("jszip")).default;
+        const data = readFileSync(filePath);
+        const zip = await JSZip.loadAsync(data);
+        const slides: string[] = [];
+
+        let slideNum = 1;
+        while (true) {
+          const slideFile = zip.file(`ppt/slides/slide${slideNum}.xml`);
+          if (!slideFile) break;
+
+          const xml = await slideFile.async("text");
+          const textMatches = xml.match(/<a:t>([^<]*)<\/a:t>/g) ?? [];
+          const texts = textMatches.map((m: string) =>
+            m.replace(/<a:t>/, "").replace(/<\/a:t>/, ""),
+          );
+
+          if (texts.length > 0) {
+            slides.push(`### Slide ${slideNum}\n\n${texts.join("\n")}`);
+          }
+          slideNum++;
+        }
+
+        content = slides.join("\n\n");
+        break;
+      }
+
+      default:
+        return null;
+    }
+
+    if (!content || content.trim().length === 0) return null;
+
+    return {
+      id: `local:${this.name}:${relativePath}`,
+      sourceType: "local",
+      sourceName: this.name,
+      title: relativePath,
+      content,
+      contentType: "text",
+      createdAt: stat.birthtime.toISOString(),
+      updatedAt: stat.mtime.toISOString(),
+      metadata: {
+        path: relativePath,
+        extension: ext,
+        size: stat.size,
+        binaryFormat: ext.replace(".", ""),
+      },
+    };
   }
 
   private isCode(ext: string): boolean {
