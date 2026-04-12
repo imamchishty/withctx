@@ -13,8 +13,7 @@ import {
 } from "../../wiki/runbook.js";
 import { createLLMFromCtxConfig } from "../../llm/index.js";
 import { ConnectorRegistry } from "../../connectors/registry.js";
-import { LocalFilesConnector } from "../../connectors/local-files.js";
-import { safeResolve } from "../../security/paths.js";
+import { buildConnectors as buildConnectorsFromConfig } from "../../connectors/build.js";
 import { safeGenerate } from "../../connectors/safe-generator.js";
 import { progressBar, formatCost, formatTokens, formatDuration } from "../utils/progress.js";
 import type { RawDocument } from "../../types/source.js";
@@ -111,34 +110,15 @@ function getConnectorErrorHelp(connectorType: string, error: string): string {
   }
 }
 
+/**
+ * Thin wrapper around the shared `buildConnectorsFromConfig` so the
+ * rest of this file (and its existing call sites) stay unchanged.
+ * The real logic — including registration of Jira/Confluence/GitHub/
+ * Teams/SharePoint connectors — lives in `src/connectors/build.ts`
+ * so both `ctx ingest` and `ctx sync` wire up identically.
+ */
 function buildConnectors(config: ReturnType<typeof loadConfig>, projectRoot: string): ConnectorRegistry {
-  const registry = new ConnectorRegistry();
-
-  // Register local sources. Every path is funnelled through
-  // `safeResolve` so a malicious ctx.yaml (`sources.local[].path:
-  // ../../etc/passwd` or `/etc/passwd`) cannot escape the project
-  // root. Entries that fail the safety check are silently dropped —
-  // we don't want one bad row to take out the whole ingest, and
-  // `ctx doctor` will flag them on its next run.
-  if (config.sources?.local) {
-    for (const source of config.sources.local) {
-      const resolvedPath = safeResolve(source.path, projectRoot);
-      if (resolvedPath === null) {
-        console.warn(
-          chalk.yellow(
-            `  ⚠ skipping source "${source.name}" — path "${source.path}" escapes project root`
-          )
-        );
-        continue;
-      }
-      registry.register(new LocalFilesConnector(source.name, resolvedPath));
-    }
-  }
-
-  // Other connector types (jira, confluence, github, teams) would be
-  // registered here once their connector implementations exist.
-
-  return registry;
+  return buildConnectorsFromConfig(config, projectRoot);
 }
 
 function buildCompilePrompt(documents: RawDocument[], existingPages: string[]): string {

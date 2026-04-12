@@ -48,6 +48,59 @@ export interface AskRewriteResult {
 }
 
 /**
+ * Bespoke help text for `ctx ask`. Printed directly by the dispatcher
+ * when the user types `ctx ask --help`, `ctx ask -h`, or `ctx ask`
+ * with no positional argument. We short-circuit Commander entirely for
+ * this path because the root program overrides `formatHelp` to print
+ * the 12-verb core help for every subcommand, which used to bury
+ * ask-specific usage under a wall of unrelated commands.
+ *
+ * Exported for testing; production code calls it from
+ * {@link applyAskRewrite}.
+ */
+export function formatAskHelp(): string {
+  return [
+    "",
+    "ctx ask — ask the wiki anything",
+    "",
+    "USAGE",
+    "  ctx ask \"<question>\"            One-shot query (default)",
+    "  ctx ask \"<question>\" --continue Continue the previous conversation",
+    "  ctx ask \"<question>\" --json     Emit structured JSON (for scripts / CI)",
+    "  ctx ask --chat                   Stateful REPL chat session",
+    "  ctx ask --search \"<term>\"       Semantic vector search over pages",
+    "  ctx ask --grep \"<pattern>\"      Literal grep over raw page text (no LLM)",
+    "  ctx ask --who \"<topic>\"         Find the owner / author of a topic",
+    "",
+    "EXAMPLES",
+    "  ctx ask \"how does authentication work?\"",
+    "  ctx ask \"what changed last week?\" --json",
+    "  ctx ask --chat",
+    "  ctx ask --search \"rate limiting\" --limit 5",
+    "  ctx ask --who \"payments service\"",
+    "",
+    "See also:  ctx help         (12 core verbs)",
+    "           ctx help --all   (every command)",
+    "",
+  ].join("\n");
+}
+
+/**
+ * True if the argv tail (after stripping the leading `ask` verb) is a
+ * request for help — either `--help`, `-h`, or completely empty.
+ *
+ * An empty tail is treated as help because `ctx ask` on its own has
+ * no useful default action; without this, Commander would have
+ * rewritten it to `ctx query` and emitted the raw Commander error
+ * "missing required argument 'question'", which leaks implementation
+ * detail to users who were trying to discover the command.
+ */
+export function isAskHelpRequest(restAfterAsk: string[]): boolean {
+  if (restAfterAsk.length === 0) return true;
+  return restAfterAsk.includes("--help") || restAfterAsk.includes("-h");
+}
+
+/**
  * Given the raw argv tail (everything after `ctx`), detect whether the
  * first token is `ask` and if so rewrite it to the appropriate legacy
  * verb.
@@ -120,11 +173,26 @@ export function rewriteAskArgs(tail: string[]): AskRewriteResult | null {
  * In-place rewrite of `process.argv` based on `rewriteAskArgs`. Called
  * once at CLI boot, before `program.parse(process.argv)`. If the
  * invocation isn't `ctx ask ...`, this is a no-op.
+ *
+ * Short-circuits the help path: `ctx ask --help`, `ctx ask -h`, and
+ * bare `ctx ask` print {@link formatAskHelp} to stdout and exit 0.
+ * We do that here — before Commander ever sees the argv — because
+ * the root program overrides `formatHelp` to print the core verb
+ * grid, and if we rewrote `ask --help` to `query --help` the user
+ * would get the 12-verb grid instead of ask-specific usage.
  */
 export function applyAskRewrite(argv: string[] = process.argv): void {
   // argv[0] is node, argv[1] is the ctx script. Everything after that
   // is the user's command tail.
   const tail = argv.slice(2);
+  if (tail.length === 0 || tail[0] !== "ask") return;
+
+  const restAfterAsk = tail.slice(1);
+  if (isAskHelpRequest(restAfterAsk)) {
+    process.stdout.write(formatAskHelp() + "\n");
+    process.exit(0);
+  }
+
   const rewrite = rewriteAskArgs(tail);
   if (!rewrite) return;
 

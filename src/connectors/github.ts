@@ -2,13 +2,24 @@ import { Octokit } from "@octokit/rest";
 import type { SourceConnector } from "./types.js";
 import type { RawDocument, FetchOptions, SourceStatus } from "../types/source.js";
 import type { GitHubSource } from "../types/config.js";
+import { resolveGitHubBaseUrl, resolveGitHubToken } from "./github-url.js";
 
 /**
- * Connector for GitHub repositories.
- * Uses @octokit/rest to fetch repos, READMEs, issues, and PRs.
- * Supports GitHub Enterprise via `sources.github[].base_url` in ctx.yaml.
- * The config field is SafeHttpUrl-validated so a hostile config cannot
- * point Octokit at metadata endpoints or internal services.
+ * Connector for GitHub repositories, working uniformly across:
+ *
+ *   • github.com (cloud) — default when no base_url is set
+ *   • GitHub Enterprise Server — set base_url to your GHES host; the
+ *     connector will auto-append `/api/v3` if you forgot it
+ *   • Running inside a GitHub Actions workflow on either — the
+ *     connector picks up `GITHUB_TOKEN` and `GITHUB_API_URL` from the
+ *     runner environment when they are not set in ctx.yaml
+ *
+ * Uses @octokit/rest which in turn uses Node's global fetch dispatcher.
+ * That means the proxy + TLS bootstrap in {@link initNetwork} applies
+ * here automatically — HTTPS_PROXY and NODE_EXTRA_CA_CERTS "just work".
+ *
+ * The `base_url` field is SafeHttpUrl-validated upstream so a hostile
+ * config cannot point Octokit at metadata endpoints or private IPs.
  */
 export class GitHubConnector implements SourceConnector {
   readonly type = "github" as const;
@@ -17,6 +28,8 @@ export class GitHubConnector implements SourceConnector {
   private owner: string;
   private repo?: string;
   private status: SourceStatus;
+  /** The API base URL actually in use (after normalization), for diagnostics. */
+  readonly effectiveBaseUrl: string;
 
   constructor(config: GitHubSource) {
     this.name = config.name;
@@ -28,15 +41,31 @@ export class GitHubConnector implements SourceConnector {
       status: "disconnected",
     };
 
+    // Pick the token from config, GITHUB_TOKEN, or GH_TOKEN — in that
+    // order — so the same ctx.yaml works on a dev laptop, in CI, and
+    // inside an Actions workflow with zero env-specific tweaks.
+    const token = resolveGitHubToken(config.token);
+    if (!token) {
+      throw new Error(
+        `GitHub source "${config.name}" has no token. Set it in ctx.yaml or ` +
+          `export GITHUB_TOKEN (or GH_TOKEN) in your environment.`,
+      );
+    }
+
+    // Resolve the API base URL: explicit config → GITHUB_API_URL (set
+    // by Actions runners, including GHES) → Octokit's github.com
+    // default. The normaliser fixes the common GHES foot-guns:
+    //   • missing /api/v3 suffix
+    //   • bare host without scheme
+    //   • trailing slashes
+    const baseUrl = resolveGitHubBaseUrl(config.base_url);
+    this.effectiveBaseUrl = baseUrl ?? "https://api.github.com";
+
     const octokitOptions: ConstructorParameters<typeof Octokit>[0] = {
-      auth: config.token,
+      auth: token,
     };
-    // Octokit uses camelCase (`baseUrl`) while ctx.yaml uses snake_case
-    // (`base_url`) to match the rest of the source schemas. The Zod
-    // refinement on SafeHttpUrl has already blocked private IPs and
-    // non-http(s) schemes before we get here.
-    if (config.base_url) {
-      octokitOptions.baseUrl = config.base_url;
+    if (baseUrl) {
+      octokitOptions.baseUrl = baseUrl;
     }
     this.octokit = new Octokit(octokitOptions);
   }

@@ -2,6 +2,7 @@ import { Octokit } from "@octokit/rest";
 import type { SourceConnector } from "./types.js";
 import type { RawDocument, FetchOptions, SourceStatus } from "../types/source.js";
 import type { CicdSource } from "../types/config.js";
+import { resolveGitHubBaseUrl, resolveGitHubToken } from "./github-url.js";
 
 interface WorkflowRun {
   id: number;
@@ -36,8 +37,14 @@ interface WorkflowJob {
 
 /**
  * Connector for CI/CD pipeline data.
- * Fetches build/deploy history from CI/CD providers.
- * Currently supports GitHub Actions, extensible to Jenkins and GitLab CI.
+ *
+ * Currently supports GitHub Actions (both github.com and GitHub
+ * Enterprise Server). Extensible to Jenkins and GitLab CI, not yet
+ * wired.
+ *
+ * Like the `github` source, this connector picks up `GITHUB_TOKEN`
+ * from the environment and `GITHUB_API_URL` from Actions runners so
+ * running it inside a workflow needs zero config.
  */
 export class CicdConnector implements SourceConnector {
   readonly type = "cicd" as const;
@@ -48,6 +55,8 @@ export class CicdConnector implements SourceConnector {
   private provider: string;
   private limit: number;
   private status: SourceStatus;
+  /** Effective API base URL after normalisation — exposed for diagnostics. */
+  readonly effectiveBaseUrl: string;
 
   constructor(config: CicdSource) {
     this.name = config.name;
@@ -67,12 +76,23 @@ export class CicdConnector implements SourceConnector {
       status: "disconnected",
     };
 
-    const token = config.token || process.env.GITHUB_TOKEN;
+    const token = resolveGitHubToken(config.token);
     if (!token) {
-      throw new Error("No token provided and GITHUB_TOKEN env var not set.");
+      throw new Error(
+        `CI/CD source "${config.name}" has no token. Set it in ctx.yaml or ` +
+          `export GITHUB_TOKEN / GH_TOKEN in your environment (GitHub Actions ` +
+          `sets GITHUB_TOKEN for you automatically).`,
+      );
     }
 
-    this.octokit = new Octokit({ auth: token });
+    const baseUrl = resolveGitHubBaseUrl(config.base_url);
+    this.effectiveBaseUrl = baseUrl ?? "https://api.github.com";
+
+    const octokitOptions: ConstructorParameters<typeof Octokit>[0] = { auth: token };
+    if (baseUrl) {
+      octokitOptions.baseUrl = baseUrl;
+    }
+    this.octokit = new Octokit(octokitOptions);
   }
 
   async validate(): Promise<boolean> {

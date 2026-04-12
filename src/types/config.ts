@@ -129,11 +129,25 @@ const ConfluenceSourceSchema = z.object({
 
 const GitHubSourceSchema = z.object({
   name: z.string(),
-  token: z.string(),
+  /**
+   * GitHub API token. Optional here because the connector will fall
+   * back to `GITHUB_TOKEN` or `GH_TOKEN` from the environment — that
+   * makes the same ctx.yaml work unchanged in a GitHub Actions
+   * workflow, where the token is injected automatically.
+   */
+  token: z.string().optional(),
   owner: z.string(),
   repo: z.string().optional(),
   /**
    * Optional GitHub Enterprise API base URL. Omit for github.com.
+   *
+   * You may write it in any common form — the connector normalises:
+   *   • github.com                    → https://api.github.com
+   *   • https://github.corp.com       → https://github.corp.com/api/v3
+   *   • https://github.corp.com/api/v3 (passthrough)
+   *
+   * When running inside GitHub Actions on GHES, omit this field and
+   * the connector will use the `GITHUB_API_URL` the runner injects.
    *
    * Goes through SafeHttpUrl so a hostile config cannot point Octokit
    * at `http://169.254.169.254/` or an internal service. Validated
@@ -161,6 +175,13 @@ const CicdSourceSchema = z.object({
   provider: z.enum(["github-actions", "jenkins", "gitlab-ci"]),
   repo: z.string(),
   token: z.string().optional(),
+  /**
+   * Optional API base URL. For `github-actions`, this is the GitHub
+   * Enterprise Server API endpoint. Same normalisation + env-var
+   * fallback as the `github` source: omit on a GHES Actions runner
+   * and `GITHUB_API_URL` is picked up automatically.
+   */
+  base_url: SafeHttpUrl.optional(),
   limit: z.number().positive().optional(),
 });
 
@@ -209,12 +230,65 @@ const SlackSourceSchema = z.object({
   base_url: SafeHttpUrl.optional(),
 });
 
+/**
+ * SharePoint / OneDrive source.
+ *
+ * You can list multiple entries under `sharepoint:` to pull from
+ * several sites at once — each entry is a separate connector with
+ * its own name, so `ctx sync --source <name>` can target a single
+ * site without touching the others.
+ *
+ * Auth is shared with the Teams connector: the Microsoft Graph app
+ * registration reads its tenant/client/secret from environment
+ * variables (`TEAMS_TENANT_ID`, `TEAMS_CLIENT_ID`,
+ * `TEAMS_CLIENT_SECRET`) so the ctx.yaml stays free of secrets.
+ *
+ * Example:
+ *
+ *   sources:
+ *     sharepoint:
+ *       - name: engineering-drive
+ *         site: acme.sharepoint.com/sites/engineering
+ *         paths: [/Shared Documents/Handbook, /Shared Documents/ADRs]
+ *         filetypes: [.docx, .pdf, .xlsx]
+ *       - name: finance-drive
+ *         site: acme.sharepoint.com/sites/finance
+ *         files: [/Shared Documents/FY24/budget.xlsx]
+ */
+const SharePointSourceSchema = z.object({
+  name: z.string(),
+  /**
+   * SharePoint site URL, either full (`https://acme.sharepoint.com/sites/engineering`)
+   * or host+path form (`acme.sharepoint.com/sites/engineering`). The
+   * connector normalises the scheme internally.
+   */
+  site: z.string(),
+  /**
+   * Folder paths within the site's default drive to crawl
+   * recursively. Omit to skip folder crawling (use `files` below
+   * instead).
+   */
+  paths: z.array(z.string()).optional(),
+  /**
+   * Individual files to fetch, each as a path inside the drive
+   * (e.g. `/Shared Documents/handbook.docx`). Useful for pulling a
+   * curated set without crawling a whole folder tree.
+   */
+  files: z.array(z.string()).optional(),
+  /**
+   * Which file extensions to process. Defaults to
+   * `[.docx, .xlsx, .pptx, .pdf, .md]` when omitted.
+   */
+  filetypes: z.array(z.string()).optional(),
+});
+
 const SourcesSchema = z.object({
   local: z.array(LocalSourceSchema).optional(),
   jira: z.array(JiraSourceSchema).optional(),
   confluence: z.array(ConfluenceSourceSchema).optional(),
   github: z.array(GitHubSourceSchema).optional(),
   teams: z.array(TeamsSourceSchema).optional(),
+  sharepoint: z.array(SharePointSourceSchema).optional(),
   cicd: z.array(CicdSourceSchema).optional(),
   coverage: z.array(CoverageSourceSchema).optional(),
   "pull-requests": z.array(PullRequestsSourceSchema).optional(),
@@ -363,6 +437,7 @@ export type JiraSource = z.infer<typeof JiraSourceSchema>;
 export type ConfluenceSource = z.infer<typeof ConfluenceSourceSchema>;
 export type GitHubSource = z.infer<typeof GitHubSourceSchema>;
 export type TeamsSource = z.infer<typeof TeamsSourceSchema>;
+export type SharePointSource = z.infer<typeof SharePointSourceSchema>;
 export type CicdSource = z.infer<typeof CicdSourceSchema>;
 export type CoverageSource = z.infer<typeof CoverageSourceSchema>;
 export type PullRequestsSource = z.infer<typeof PullRequestsSourceSchema>;

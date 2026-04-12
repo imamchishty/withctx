@@ -1,6 +1,6 @@
 {
   "name": "withctx",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Compiled context layer for AI agents — Claude compiles your project knowledge into a living wiki",
   "license": "MIT",
   "author": "Imam Chishty",
@@ -43,6 +43,7 @@
     "test:watch": "vitest",
     "test:bdd": "cucumber-js",
     "test:smoke": "bash scripts/smoke-trust-pipeline.sh",
+    "smoke:onprem": "npm run build && node scripts/smoke-onprem.mjs",
     "lint": "eslint src/",
     "clean": "rm -rf dist/",
     "prepublishOnly": "npm run clean && npm run build",
@@ -63,6 +64,7 @@
     "openai": "^4.73.0",
     "ora": "^8.2.0",
     "pdf-parse": "^1.1.1",
+    "undici": "^8.0.2",
     "xlsx": "^0.18.5",
     "yaml": "^2.7.0",
     "zod": "^3.24.0"

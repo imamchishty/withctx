@@ -9,6 +9,10 @@ import { PageManager } from "../../wiki/pages.js";
 import { createLLMFromCtxConfig } from "../../llm/index.js";
 import type { CtxConfig } from "../../types/config.js";
 import { icons, divider } from "../utils/ui.js";
+import {
+  getNetworkDiagnostics,
+  initNetwork,
+} from "../../connectors/network-bootstrap.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -519,6 +523,138 @@ function checkLastSyncAge(projectRoot: string): CheckResult | null {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Network diagnostics — TLS, proxy, and on-prem connectivity
+//
+// These checks are the single most common source of pain for first-time
+// on-prem Jira / Confluence / GHES users. Each one surfaces a setting
+// that Node's fetch honours (or does not honour) and tells the user
+// exactly what to set if it's misconfigured.
+// ---------------------------------------------------------------------------
+
+async function checkNetworkDiagnostics(): Promise<CheckResult[]> {
+  // Ensure the bootstrap has run — doctor may be invoked before the CLI
+  // has finished initialising if it's the first thing the user types.
+  let diag = getNetworkDiagnostics();
+  if (!diag) {
+    try {
+      diag = await initNetwork();
+    } catch {
+      return [
+        {
+          label: "Network bootstrap",
+          status: "fail",
+          message: "Network bootstrap failed during doctor run",
+          fix: "Report this at https://github.com/imamchishty/withctx/issues with the output of `ctx --verbose doctor`.",
+        },
+      ];
+    }
+  }
+
+  const results: CheckResult[] = [];
+
+  // --- TLS certificate trust ---
+  if (diag.tlsVerificationDisabled) {
+    results.push({
+      label: "TLS verification",
+      status: "fail",
+      message: "DISABLED via NODE_TLS_REJECT_UNAUTHORIZED=0",
+      fix:
+        "Unset NODE_TLS_REJECT_UNAUTHORIZED and instead point Node at " +
+        "your corporate CA bundle:\n" +
+        "    export NODE_EXTRA_CA_CERTS=/path/to/corp-ca.pem\n" +
+        "This is a real security hole — every HTTPS connection will " +
+        "accept ANY certificate, including attacker-controlled ones.",
+    });
+  } else if (diag.caBundle) {
+    if (diag.caBundleError) {
+      results.push({
+        label: "NODE_EXTRA_CA_CERTS",
+        status: "fail",
+        message: `${diag.caBundle} (${diag.caBundleError})`,
+        fix:
+          "Fix the path or contents of the bundle. It must be a PEM-encoded " +
+          "certificate file. If you exported it from your browser, make sure " +
+          "you picked 'Base64 / PEM' and not 'DER / binary'.",
+      });
+    } else {
+      results.push({
+        label: "NODE_EXTRA_CA_CERTS",
+        status: "pass",
+        message: `Trusting ${diag.caBundle} ${chalk.dim("(on-prem TLS will validate against this)")}`,
+      });
+    }
+  } else {
+    results.push({
+      label: "NODE_EXTRA_CA_CERTS",
+      status: "pass",
+      message: `Using Node default CA bundle ${chalk.dim("(fine for github.com / Atlassian Cloud; on-prem may need a custom CA)")}`,
+    });
+  }
+
+  // --- HTTP proxy plumbing ---
+  const proxyInEffect = diag.httpsProxy ?? diag.httpProxy;
+  if (proxyInEffect) {
+    if (diag.proxyAgentInstalled) {
+      const noProxyNote = diag.noProxy
+        ? ` · NO_PROXY=${diag.noProxy}`
+        : "";
+      results.push({
+        label: "HTTPS_PROXY",
+        status: "pass",
+        message: `Routing through ${proxyInEffect}${noProxyNote}`,
+      });
+    } else {
+      results.push({
+        label: "HTTPS_PROXY",
+        status: "fail",
+        message: `${proxyInEffect} is set but the proxy dispatcher failed to install`,
+        fix:
+          "withctx could not install the undici proxy agent. Run " +
+          "`npm install undici` inside the withctx install, or unset " +
+          "HTTPS_PROXY to bypass.",
+      });
+    }
+  } else {
+    results.push({
+      label: "HTTPS_PROXY",
+      status: "pass",
+      message: chalk.dim("Not set — direct connections (fine for cloud, set this if on-prem sits behind a corporate proxy)"),
+    });
+  }
+
+  return results;
+}
+
+// ---------------------------------------------------------------------------
+// Claude Code CLI detection — many users install withctx before installing
+// the `claude` CLI. Flag it as a warning if the provider is anthropic and
+// no key is set, so the fix message tells them the two-step install.
+// ---------------------------------------------------------------------------
+
+function checkClaudeCli(config: CtxConfig | null): CheckResult | null {
+  const provider = resolveProviderName(config);
+  if (provider !== "anthropic") return null;
+
+  // If ANTHROPIC_API_KEY is set OR ctx.yaml has a key, the LLM is wired
+  // directly and we don't need the CLI. checkApiKey already covers
+  // that case — this check only fires when the user would otherwise
+  // get a confusing "command not found" from the shell.
+  if (envIsSet("ANTHROPIC_API_KEY")) return null;
+  if (config?.ai?.api_key && config.ai.api_key.trim().length > 0) return null;
+
+  return {
+    label: "Claude credentials",
+    status: "fail",
+    message: "No ANTHROPIC_API_KEY and no ai.api_key in ctx.yaml",
+    fix:
+      "Either:\n" +
+      "  1. export ANTHROPIC_API_KEY=sk-ant-... (get one at https://console.anthropic.com)\n" +
+      "  2. Or install the Claude Code CLI and sign in: https://docs.claude.com/claude-code\n" +
+      "  3. Or switch to a local model in ctx.yaml: ai.provider: ollama",
+  };
+}
+
 function checkDependencies(projectRoot: string): CheckResult | null {
   const pkgPath = join(projectRoot, "package.json");
   if (!existsSync(pkgPath)) return null;
@@ -614,6 +750,9 @@ export function registerDoctorCommand(program: Command): void {
       results.push(checkCtxDirectory());
       results.push(checkApiKey(config));
 
+      const claudeCliCheck = checkClaudeCli(config);
+      if (claudeCliCheck) results.push(claudeCliCheck);
+
       const apiResult = await checkApiConnection(config, { silent: json });
       results.push(apiResult);
 
@@ -622,6 +761,19 @@ export function registerDoctorCommand(program: Command): void {
         for (const r of results) {
           console.log(`  ${icon(r.status)} ${r.label}: ${statusColor(r.status, r.message)}`);
         }
+      }
+
+      // ----- Network diagnostics (TLS, proxy, on-prem readiness) -----
+      const netResults = await checkNetworkDiagnostics();
+      if (netResults.length > 0) {
+        if (!json) {
+          console.log();
+          console.log(chalk.bold("Network"));
+          for (const r of netResults) {
+            console.log(`  ${icon(r.status)} ${r.label}: ${statusColor(r.status, r.message)}`);
+          }
+        }
+        results.push(...netResults);
       }
 
       if (config && projectRoot) {

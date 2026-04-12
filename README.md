@@ -1,7 +1,7 @@
 # withctx
 
 [![CI](https://github.com/imamchishty/withctx/actions/workflows/ci.yml/badge.svg)](https://github.com/imamchishty/withctx/actions/workflows/ci.yml)
-[![Tests](https://img.shields.io/badge/tests-136%20passing-brightgreen)](https://github.com/imamchishty/withctx/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-572%20passing-brightgreen)](https://github.com/imamchishty/withctx/actions/workflows/ci.yml)
 
 **AI compiles your project knowledge into a living wiki that engineers and agents read before writing code.**
 
@@ -227,24 +227,120 @@ ctx search "how does authentication work"    # Semantic search
 
 ## 16 Source Connectors
 
-| Source | What it ingests |
-|--------|----------------|
-| **Local files** | Markdown, code, text files |
-| **PDF** | Text, tables, sections |
-| **Word** (.docx) | Text, tables, embedded diagrams (Claude vision) |
-| **PowerPoint** (.pptx) | Slides, speaker notes, embedded images |
-| **Excel** (.xlsx/.csv) | Sheets, data, headers as markdown tables |
-| **GitHub** | Repos, issues, PRs, code |
-| **Jira** | Issues, epics, comments (multiple projects, JQL, labels) |
-| **Confluence** | Pages, spaces (multiple spaces, labels, page trees) |
-| **Microsoft Teams** | Channels, threads, transcripts (noise filtered) |
-| **SharePoint** | Word, Excel, PowerPoint, PDF from SharePoint/OneDrive |
+| Source | What it ingests | Deployment modes |
+|--------|----------------|-----------------|
+| **Local files** | Markdown, code, text files | n/a |
+| **PDF** | Text, tables, sections | n/a |
+| **Word** (.docx) | Text, tables, embedded diagrams (Claude vision) | n/a |
+| **PowerPoint** (.pptx) | Slides, speaker notes, embedded images | n/a |
+| **Excel** (.xlsx/.csv) | Sheets, data, headers as markdown tables | n/a |
+| **GitHub** | Repos, issues, PRs, code | **Cloud, GHES, GitHub Actions** |
+| **Jira** | Issues, epics, comments (multiple projects, JQL, labels) | **Cloud + Server/DC (PAT)** |
+| **Confluence** | Pages, spaces (multiple spaces, labels, page trees) | **Cloud + Server/DC (PAT)** |
+| **Microsoft Teams** | Channels, threads, transcripts (noise filtered) | Cloud (Microsoft Graph) |
+| **SharePoint** | Word, Excel, PowerPoint, PDF from one or many sites | Cloud (Microsoft Graph) |
 | **CI/CD** | GitHub Actions workflow runs, build stats, failure analysis |
 | **Test Coverage** | lcov, istanbul, cobertura reports with per-file breakdown |
 | **Pull Requests** | Merged PRs, reviewers, files changed, activity patterns |
 | **OpenAPI** | API endpoints, schemas, auth requirements |
 | **Notion** | Database entries, pages, content blocks |
 | **Slack** | Channel messages, threads (noise filtered) |
+
+## Running on a Corporate / On-Prem Network
+
+withctx is built to run inside a corporate network with self-hosted Jira,
+Confluence, and GitHub Enterprise Server behind a TLS-intercepting proxy.
+Every network-bound connector goes through the same fetch stack, so two
+environment variables configure the whole tool:
+
+```bash
+# Trust the corporate CA bundle so Jira/Confluence/GitHub TLS
+# handshakes don't fail with "self-signed certificate in chain".
+export NODE_EXTRA_CA_CERTS=/etc/ssl/certs/corp-ca.pem
+
+# Route all outbound requests through the corporate proxy. Node's
+# global fetch doesn't honour this by default — withctx installs an
+# undici EnvHttpProxyAgent at startup so it just works.
+export HTTPS_PROXY=http://proxy.corp.example.com:8080
+export NO_PROXY=.corp.example.com,localhost
+```
+
+Confirm everything resolves correctly before compiling a wiki:
+
+```bash
+ctx doctor                 # prints a Network section with ✓ / ✗ per setting
+npm run smoke:onprem jira  # real-call smoke test, one connector at a time
+```
+
+`ctx.yaml` for an on-prem stack — no Cloud flags needed:
+
+```yaml
+project: acme-platform
+sources:
+  jira:
+    - name: corp-jira
+      base_url: https://jira.corp.example.com   # Server/DC, no email → PAT auth
+      token: ${JIRA_TOKEN}
+      project: ENG
+
+  confluence:
+    - name: corp-wiki
+      base_url: https://confluence.corp.example.com
+      token: ${CONFLUENCE_TOKEN}
+      space: ENG
+
+  github:
+    - name: corp-github
+      base_url: https://github.corp.example.com  # GHES — /api/v3 auto-appended
+      owner: platform
+      token: ${GH_PAT}
+
+  sharepoint:
+    - name: engineering-drive
+      site: acme.sharepoint.com/sites/engineering
+      paths: [/Shared Documents/Handbook, /Shared Documents/ADRs]
+      filetypes: [.docx, .pdf, .xlsx]
+    - name: finance-drive                         # multiple sites in one run
+      site: acme.sharepoint.com/sites/finance
+      files: [/Shared Documents/FY24/budget.xlsx]
+```
+
+For Cloud you add `email:` to the Jira/Confluence entries, or drop
+`base_url` from the GitHub entry. Everything else stays the same.
+
+## Running in GitHub Actions
+
+Inside a workflow, the GitHub connector picks up `GITHUB_TOKEN` and
+`GITHUB_API_URL` from the runner — so the exact same `ctx.yaml` that
+works on a laptop also works in CI, on github.com and GitHub
+Enterprise Server alike, with no environment-specific edits.
+
+```yaml
+# .github/workflows/sync-context.yml
+name: Sync Context
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: self-hosted   # use your GHES runner pool
+    steps:
+      - uses: actions/checkout@v4
+      - run: npm install -g withctx
+      - run: ctx sync
+        env:
+          ANTHROPIC_API_KEY:  ${{ secrets.ANTHROPIC_API_KEY }}
+          JIRA_TOKEN:         ${{ secrets.JIRA_TOKEN }}
+          CONFLUENCE_TOKEN:   ${{ secrets.CONFLUENCE_TOKEN }}
+          # GITHUB_TOKEN + GITHUB_API_URL are injected automatically
+      - run: |
+          git add .ctx/
+          git diff --staged --quiet || \
+            git commit -m "ctx: sync $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push
+```
 
 ## Single Repo vs Multi-Repo
 

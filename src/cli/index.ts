@@ -54,7 +54,9 @@ import { registerApproveCommand } from "./commands/approve.js";
 import { registerWhyCommand } from "./commands/why.js";
 import { registerVerifyCommand } from "./commands/verify.js";
 import { registerTeachCommand } from "./commands/teach.js";
+import { registerLlmCommand } from "./commands/llm.js";
 import { applyAskRewrite } from "./ask-dispatcher.js";
+import { initNetwork } from "../connectors/network-bootstrap.js";
 
 // Global verbosity state — commands can import and check this
 export const globalState = {
@@ -102,6 +104,7 @@ const CORE_HELP: Array<{ heading: string; commands: Array<[string, string]> }> =
     commands: [
       ["ctx setup", "Detect sources, write ctx.yaml, compile the wiki"],
       ["ctx doctor", "Diagnose setup, credentials and dependencies"],
+      ["ctx llm", "Check LLM connectivity (provider, model, latency)"],
       ["ctx config", "View or edit configuration (sources, repos, keys)"],
     ],
   },
@@ -138,6 +141,7 @@ const GROUPED_HELP: Array<{ heading: string; commands: Array<[string, string]> }
     commands: [
       ["ctx setup", "Detect sources, write ctx.yaml, compile the wiki"],
       ["ctx doctor", "Diagnose setup, credentials and dependencies"],
+      ["ctx llm", "Check LLM connectivity — one ping, clear yes/no"],
       ["ctx config", "View / edit configuration (absorbs sources, repos)"],
     ],
   },
@@ -482,6 +486,7 @@ registerApproveCommand(program);
 registerWhyCommand(program);
 registerVerifyCommand(program);
 registerTeachCommand(program);
+registerLlmCommand(program);
 
 // ── Global error handling ────────────────────────────────────────────
 //
@@ -521,6 +526,18 @@ process.on("uncaughtException", (reason) => {
 // Rewrite `ctx ask ...` to the appropriate legacy verb before
 // Commander parses argv. A no-op for every other invocation.
 applyAskRewrite(process.argv);
+
+// Initialise global fetch dispatcher (proxy + TLS) before any command
+// constructs a connector. We await the init so undici's dispatcher is
+// installed before the first connector awaits fetch(). If it fails we
+// still let the CLI run — the diagnostic will surface in `ctx doctor`.
+try {
+  await initNetwork();
+} catch (err) {
+  process.stderr.write(
+    `[withctx] network bootstrap failed: ${err instanceof Error ? err.message : String(err)}\n`,
+  );
+}
 
 try {
   program.parse(process.argv);

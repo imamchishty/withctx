@@ -204,6 +204,19 @@ sources:
         - team: Engineering
           channel: incidents
 
+  # --- SharePoint / OneDrive (multiple sites supported) ---
+  sharepoint:
+    - name: eng-drive                                    # each site is its own connector
+      site: acme.sharepoint.com/sites/engineering        # ✅ safe to commit
+      paths:                                             # folders to crawl recursively
+        - /Shared Documents/Handbook
+        - /Shared Documents/ADRs
+      filetypes: [.docx, .pdf, .xlsx]                    # default: [.docx, .xlsx, .pptx, .pdf, .md]
+    - name: finance-drive
+      site: acme.sharepoint.com/sites/finance
+      files:                                             # specific files instead of folders
+        - /Shared Documents/FY24/budget.xlsx
+
   # --- CI/CD ---
   cicd:
     - name: ci
@@ -358,6 +371,61 @@ ai:
 Functionally identical to Workflow A (env still resolves first), but
 makes the dependency explicit in the file — useful as documentation of
 "which keys does this project need?".
+
+---
+
+## On-prem / corporate network
+
+If you're behind a corporate TLS-intercepting proxy or using self-hosted
+Jira/Confluence/GitHub Enterprise Server, two environment variables
+configure the whole tool:
+
+```bash
+# Trust the corporate CA bundle
+export NODE_EXTRA_CA_CERTS=/etc/ssl/certs/corp-ca.pem
+
+# Route through the corporate proxy
+export HTTPS_PROXY=http://proxy.corp.example.com:8080
+export NO_PROXY=.corp.example.com,localhost
+```
+
+**On-prem Jira / Confluence** — drop `email:` and the connector switches
+from Cloud Basic auth to Server/DC Bearer PAT auth automatically:
+
+```yaml
+sources:
+  jira:
+    - name: corp-jira
+      base_url: https://jira.corp.example.com   # no email → Bearer PAT
+      token: ${JIRA_TOKEN}
+      project: ENG
+  confluence:
+    - name: corp-wiki
+      base_url: https://confluence.corp.example.com
+      token: ${CONFLUENCE_TOKEN}
+      space: ENG
+```
+
+**GitHub Enterprise Server** — set `base_url` to your GHES host. The
+connector auto-appends `/api/v3` if you forget it. Inside a GitHub
+Actions workflow on GHES, you can omit both `token` and `base_url` —
+the runner injects `GITHUB_TOKEN` and `GITHUB_API_URL` for you:
+
+```yaml
+sources:
+  github:
+    - name: corp-github
+      base_url: https://github.corp.example.com   # /api/v3 auto-appended
+      owner: platform
+      token: ${GH_PAT}
+```
+
+Verify the setup:
+
+```bash
+ctx doctor              # shows Network section + source validation
+ctx llm                 # confirms LLM is reachable
+```
 
 ---
 

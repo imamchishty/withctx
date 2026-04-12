@@ -1,5 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { rewriteAskArgs, applyAskRewrite } from "../src/cli/ask-dispatcher.js";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import {
+  rewriteAskArgs,
+  applyAskRewrite,
+  formatAskHelp,
+  isAskHelpRequest,
+} from "../src/cli/ask-dispatcher.js";
 
 // ── rewriteAskArgs: pure function, easy to unit test ──────────────────
 
@@ -163,5 +168,130 @@ describe("applyAskRewrite", () => {
     const argv = ["/usr/bin/node", "/app/ctx", "status"];
     applyAskRewrite(argv);
     expect(process.env.CTX_ASK_MODE).toBeUndefined();
+  });
+});
+
+// ── Help-path short-circuit ─────────────────────────────────────────
+//
+// Regression coverage for two user-reported bugs:
+//   1. `ctx ask --help` printed the 12-verb core help grid instead of
+//      ask-specific usage, because the root program overrides
+//      Commander's formatHelp and the override cascaded to subcommands.
+//   2. `ctx ask` with no args errored with "missing required argument
+//      'question'", leaking the internal `query` command name to
+//      users who were trying to discover the verb.
+//
+// Fix: applyAskRewrite detects the help path and prints formatAskHelp
+// directly, then exits 0. These tests cover the detection logic plus
+// the exit-path integration.
+
+describe("isAskHelpRequest", () => {
+  it("treats an empty tail as a help request (bare `ctx ask`)", () => {
+    expect(isAskHelpRequest([])).toBe(true);
+  });
+
+  it("detects --help", () => {
+    expect(isAskHelpRequest(["--help"])).toBe(true);
+    expect(isAskHelpRequest(["foo", "--help"])).toBe(true);
+  });
+
+  it("detects -h", () => {
+    expect(isAskHelpRequest(["-h"])).toBe(true);
+    expect(isAskHelpRequest(["foo", "-h"])).toBe(true);
+  });
+
+  it("does not treat a normal question as a help request", () => {
+    expect(isAskHelpRequest(["how does auth work?"])).toBe(false);
+    expect(isAskHelpRequest(["--chat"])).toBe(false);
+    expect(isAskHelpRequest(["--json", "question"])).toBe(false);
+  });
+});
+
+describe("formatAskHelp", () => {
+  const help = formatAskHelp();
+
+  it("mentions the primary usage form first", () => {
+    expect(help).toContain("ctx ask \"<question>\"");
+  });
+
+  it("documents every mode flag", () => {
+    expect(help).toContain("--chat");
+    expect(help).toContain("--search");
+    expect(help).toContain("--grep");
+    expect(help).toContain("--who");
+    expect(help).toContain("--json");
+  });
+
+  it("does NOT mention the internal `query` verb name", () => {
+    // Leaking the internal verb was the original UX bug — make sure
+    // we never regress by accidentally reintroducing it in the help.
+    expect(help).not.toMatch(/\bctx query\b/);
+  });
+
+  it("references the core help for further reading", () => {
+    expect(help).toContain("ctx help");
+  });
+});
+
+describe("applyAskRewrite — help-path short circuit", () => {
+  let originalArgv: string[];
+  let stdoutSpy: ReturnType<typeof vi.spyOn>;
+  let exitSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    originalArgv = process.argv.slice();
+    stdoutSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      // Throw instead of actually exiting so we can assert.
+      throw new Error(`process.exit(${code ?? 0})`);
+    }) as never);
+  });
+
+  afterEach(() => {
+    process.argv = originalArgv;
+    stdoutSpy.mockRestore();
+    exitSpy.mockRestore();
+  });
+
+  const writtenBlob = (): string => {
+    const calls = stdoutSpy.mock.calls as unknown as Array<[string]>;
+    return calls.map((c) => c[0]).join("");
+  };
+
+  it("prints ask-specific help on `ctx ask --help` and exits 0", () => {
+    const argv = ["/usr/bin/node", "/app/ctx", "ask", "--help"];
+    expect(() => applyAskRewrite(argv)).toThrow(/process\.exit\(0\)/);
+    const out = writtenBlob();
+    expect(out).toContain("ctx ask");
+    expect(out).not.toContain("missing required argument");
+    expect(out).not.toContain("Start"); // the 12-verb grid heading
+  });
+
+  it("prints ask-specific help on `ctx ask -h` and exits 0", () => {
+    const argv = ["/usr/bin/node", "/app/ctx", "ask", "-h"];
+    expect(() => applyAskRewrite(argv)).toThrow(/process\.exit\(0\)/);
+    expect(writtenBlob()).toContain("ctx ask");
+  });
+
+  it("prints ask-specific help on bare `ctx ask` (no args) and exits 0", () => {
+    const argv = ["/usr/bin/node", "/app/ctx", "ask"];
+    expect(() => applyAskRewrite(argv)).toThrow(/process\.exit\(0\)/);
+    const out = writtenBlob();
+    expect(out).toContain("USAGE");
+    // Must NOT leak the internal `query` command name.
+    expect(out).not.toMatch(/missing required argument/i);
+    expect(out).not.toMatch(/\bctx query\b/);
+  });
+
+  it("still rewrites a real question and does NOT print help", () => {
+    const argv = ["/usr/bin/node", "/app/ctx", "ask", "how does auth work?"];
+    applyAskRewrite(argv); // should not throw
+    expect(stdoutSpy).not.toHaveBeenCalled();
+    expect(argv).toEqual([
+      "/usr/bin/node",
+      "/app/ctx",
+      "query",
+      "how does auth work?",
+    ]);
   });
 });

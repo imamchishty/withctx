@@ -9,9 +9,7 @@ import { CtxDirectory } from "../../storage/ctx-dir.js";
 import { PageManager } from "../../wiki/pages.js";
 import { createLLMFromCtxConfig } from "../../llm/index.js";
 import { assertWithinBudget, BudgetExceededError, checkBudgetWarning } from "../../usage/budget.js";
-import { ConnectorRegistry } from "../../connectors/registry.js";
-import { LocalFilesConnector } from "../../connectors/local-files.js";
-import { safeResolve } from "../../security/paths.js";
+import { buildConnectors } from "../../connectors/build.js";
 import { HashIndex, type SyncIndex, type SyncIndexEntry } from "../../sync/hash-index.js";
 import { formatCost, formatDuration } from "../utils/progress.js";
 import * as ui from "../utils/ui.js";
@@ -137,26 +135,18 @@ export function registerSyncCommand(program: Command): void {
         const hashIndex = new HashIndex(ctxDir.path);
         const oldIndex = await hashIndex.load();
 
-        // Build connectors. Every local source path is resolved
-        // against the project root through `safeResolve` so an
-        // attacker-controlled ctx.yaml with `../../etc/passwd` or an
-        // absolute `/etc/hosts` can never be followed.
-        const registry = new ConnectorRegistry();
-        if (config.sources?.local) {
-          for (const source of config.sources.local) {
-            if (options.source && source.name !== options.source) continue;
-            const resolvedPath = safeResolve(source.path, projectRoot);
-            if (resolvedPath === null) {
-              console.warn(
-                chalk.yellow(
-                  `  ⚠ skipping source "${source.name}" — path "${source.path}" escapes project root`
-                )
-              );
-              continue;
-            }
-            registry.register(new LocalFilesConnector(source.name, resolvedPath));
-          }
-        }
+        // Build connectors via the shared registry builder so sync
+        // picks up every configured source type — local, jira,
+        // confluence, github, teams, sharepoint — identically to
+        // ingest. Historically this function only wired up local
+        // files, which silently dropped every external source.
+        //
+        // The `--source <name>` filter is honoured: if the user
+        // passed one, only that source is registered.
+        const registry = buildConnectors(config, projectRoot, {
+          sourceFilter: options.source,
+          cacheDir: ctxDir.sourcesPath,
+        });
 
         const connectors = registry.getAll();
         if (connectors.length === 0) {

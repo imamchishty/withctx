@@ -4,6 +4,125 @@
  */
 
 /**
+ * Enrich a raw network / TLS error with actionable remediation advice. The
+ * original error is preserved on the returned object as `cause` so debug
+ * tooling can still reach the stack.
+ *
+ * These messages are tuned for the failures that bite on-prem Atlassian
+ * users first: self-signed TLS chains, corporate proxies that aren't
+ * wired into Node's fetch, DNS for internal hostnames, and connection
+ * refused on custom context paths.
+ */
+export function explainNetworkError(url: string, error: unknown): Error {
+  const original = error instanceof Error ? error : new Error(String(error));
+  const msg = original.message.toLowerCase();
+
+  // Walk error.cause chains — undici often nests the real reason one
+  // or two levels deep (UND_ERR_SOCKET → Error → cause).
+  const chain: string[] = [msg];
+  let cursor: unknown = original;
+  for (let i = 0; i < 4; i++) {
+    if (cursor && typeof cursor === "object" && "cause" in cursor) {
+      const next = (cursor as { cause?: unknown }).cause;
+      if (next instanceof Error) {
+        chain.push(next.message.toLowerCase());
+        cursor = next;
+        continue;
+      }
+    }
+    break;
+  }
+  const blob = chain.join(" | ");
+
+  const tlsSignals = [
+    "self-signed",
+    "self signed",
+    "unable to verify",
+    "unable to get local issuer",
+    "cert_has_expired",
+    "depth_zero_self_signed_cert",
+    "unable_to_verify_leaf_signature",
+    "err_tls_cert_altname_invalid",
+    "certificate",
+  ];
+  if (tlsSignals.some((s) => blob.includes(s))) {
+    const err = new Error(
+      `TLS verification failed for ${url}\n\n` +
+        `  ${original.message}\n\n` +
+        `  This usually means your on-prem server presents a certificate\n` +
+        `  signed by a corporate CA that Node does not trust.\n\n` +
+        `  Fix (preferred):\n` +
+        `    export NODE_EXTRA_CA_CERTS=/path/to/corp-ca.pem\n` +
+        `    ctx doctor     # confirm the bundle loaded\n\n` +
+        `  Debug escape hatch (INSECURE — do not ship, do not use against production):\n` +
+        `    export NODE_TLS_REJECT_UNAUTHORIZED=0`,
+    );
+    (err as { cause?: unknown }).cause = original;
+    return err;
+  }
+
+  if (blob.includes("enotfound") || blob.includes("eai_again") || blob.includes("dns")) {
+    const err = new Error(
+      `DNS lookup failed for ${url}\n\n` +
+        `  ${original.message}\n\n` +
+        `  The hostname could not be resolved. For on-prem Atlassian this\n` +
+        `  usually means you are off the corporate network / VPN, or the\n` +
+        `  hostname only resolves behind a proxy.\n\n` +
+        `  Fix:\n` +
+        `    • Connect to the VPN that exposes this server\n` +
+        `    • Or set HTTPS_PROXY=http://your.corp.proxy:8080\n` +
+        `    • Or check that the hostname in ctx.yaml is correct`,
+    );
+    (err as { cause?: unknown }).cause = original;
+    return err;
+  }
+
+  if (blob.includes("econnrefused")) {
+    const err = new Error(
+      `Connection refused by ${url}\n\n` +
+        `  ${original.message}\n\n` +
+        `  The server is reachable but no service is listening on that\n` +
+        `  port. Common causes for on-prem Atlassian:\n` +
+        `    • Wrong context path (e.g. base_url: https://corp.com/confluence)\n` +
+        `    • Jira/Confluence service is down\n` +
+        `    • A proxy between you and the server rejected the connection`,
+    );
+    (err as { cause?: unknown }).cause = original;
+    return err;
+  }
+
+  if (blob.includes("econnreset") || blob.includes("socket hang up")) {
+    const err = new Error(
+      `Connection reset by ${url}\n\n` +
+        `  ${original.message}\n\n` +
+        `  The server closed the connection mid-request. Common causes:\n` +
+        `    • Load balancer idle timeout\n` +
+        `    • TLS negotiation failed and the peer bailed\n` +
+        `    • Upstream proxy stripped the connection\n\n` +
+        `  Try re-running the command; withctx will retry automatically. If it\n` +
+        `  persists, check HTTPS_PROXY and NODE_EXTRA_CA_CERTS.`,
+    );
+    (err as { cause?: unknown }).cause = original;
+    return err;
+  }
+
+  if (blob.includes("etimedout")) {
+    const err = new Error(
+      `Connection timed out talking to ${url}\n\n` +
+        `  ${original.message}\n\n` +
+        `  Usually means the server is unreachable from your current\n` +
+        `  network. Check your VPN / proxy / firewall.`,
+    );
+    (err as { cause?: unknown }).cause = original;
+    return err;
+  }
+
+  // Nothing matched — return the original unmodified so we don't paper
+  // over real bugs with a generic message.
+  return original;
+}
+
+/**
  * Default upper bound on the size of a single response body. 50 MB is
  * well above any legitimate Jira/Confluence/GitHub JSON payload but
  * comfortably below memory pressure. Callers that genuinely need more
