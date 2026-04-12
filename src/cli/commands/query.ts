@@ -261,19 +261,33 @@ export function registerQueryCommand(program: Command): void {
           citations = derived.citations;
           retrievalMode = "vector";
         } else {
-          // Fallback: full wiki (original behavior).
+          // Fallback: full wiki with token cap.
+          // Large wikis can exceed model context limits, so we cap at
+          // ~100K tokens (~400K chars) and include as many pages as fit.
           retrievalMode = "full";
-          if (spinner) spinner.text = "Loading full wiki (vector store unavailable)...";
+          if (spinner) spinner.text = "Loading wiki (vector store unavailable — using page selection)...";
           const pages = pageManager.list(options.scope);
           if (pages.length === 0) {
             spinner?.stop();
             throw noWikiPagesError();
           }
+          const MAX_CONTEXT_CHARS = 400_000; // ~100K tokens
+          let totalChars = 0;
           for (const pagePath of pages) {
             const page = pageManager.read(pagePath);
             if (page) {
+              if (totalChars + page.content.length > MAX_CONTEXT_CHARS) {
+                // Still add a truncated version if there's room
+                const remaining = MAX_CONTEXT_CHARS - totalChars;
+                if (remaining > 500) {
+                  contextFiles.push({ path: pagePath, content: page.content.slice(0, remaining) + "\n...[truncated — run 'ctx embed' for better results]" });
+                  citations.push({ filePath: `.ctx/context/${pagePath}` });
+                }
+                break;
+              }
               contextFiles.push({ path: pagePath, content: page.content });
               citations.push({ filePath: `.ctx/context/${pagePath}` });
+              totalChars += page.content.length;
             }
           }
         }
