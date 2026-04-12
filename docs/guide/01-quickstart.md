@@ -163,7 +163,8 @@ One verb, one mental model: "I want to ask the wiki something." Flags pick the r
 ## Sanity check
 
 ```bash
-ctx doctor      # verifies setup, credentials, dependencies
+ctx llm         # check LLM is reachable (provider, model, latency)
+ctx doctor      # full pre-flight diagnostics
 ctx status      # wiki health dashboard + approval ratio
 ctx costs       # token usage so far
 ```
@@ -214,6 +215,8 @@ ctx teach architecture.md            # drill me on what the page says
 - See every command → [03-commands.md](03-commands.md)
 - Onboarding recipes → [04-recipes.md](04-recipes.md)
 - Full `ctx.yaml` reference → [07-config-reference.md](07-config-reference.md)
+
+**On-prem / corporate network?** See the [troubleshooting guide](06-troubleshooting.md) for NODE_EXTRA_CA_CERTS, HTTPS_PROXY, and self-hosted Jira/Confluence/GitHub Enterprise setup.
 
 ## Update
 

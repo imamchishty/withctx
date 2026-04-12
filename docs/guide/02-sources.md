@@ -10,6 +10,8 @@ ctx add confluence
 ctx add github
 ctx add slack
 ctx add notion
+ctx add sharepoint
+ctx add teams
 ```
 
 Below are the manual snippets if you'd rather edit `ctx.yaml` directly.
@@ -47,6 +49,9 @@ sources:
 
 Wiki gets: ticket summaries, decisions, blockers, ownership signals. Big differentiator — most knowledge is in tickets, not docs.
 
+> **On-prem / self-hosted (Jira Server & Data Center):**
+> Drop the `JIRA_EMAIL` env var — withctx switches from Cloud Basic auth to Bearer PAT auth automatically. Set `JIRA_TOKEN` to a Jira Personal Access Token and `JIRA_BASE_URL` to your server URL. Everything else in the yaml stays the same.
+
 ---
 
 ## Confluence
@@ -67,6 +72,9 @@ sources:
 
 Pages are split into sections, doc-type-detected, cross-references resolved.
 
+> **On-prem / self-hosted (Confluence Server & Data Center):**
+> Cloud `CONFLUENCE_BASE_URL` includes `/wiki` (e.g. `https://yourco.atlassian.net/wiki`). For Server/DC, use the host root directly (e.g. `https://confluence.internal.yourco.com`) — withctx does not auto-append `/wiki`.
+
 ---
 
 ## GitHub
@@ -85,6 +93,9 @@ sources:
 ```
 
 For multi-repo setups (monorepo, sibling repos, remote-only, or CI-driven shared wiki) see the **Multi-repo / monorepo / microservices** recipe in [04-recipes.md](04-recipes.md).
+
+> **On-prem / self-hosted (GitHub Enterprise Server):**
+> Set `GITHUB_BASE_URL` to your GHES host (e.g. `https://github.internal.yourco.com`). withctx auto-appends `/api/v3`. When running inside **GitHub Actions**, you can omit both `GITHUB_TOKEN` and `GITHUB_BASE_URL` — the runner injects them automatically via the `GITHUB_TOKEN` secret and `GITHUB_API_URL` env var.
 
 ---
 
@@ -118,6 +129,58 @@ sources:
 ```
 
 Share the database with the integration first (Notion → Settings → Connections).
+
+---
+
+## SharePoint
+
+```bash
+export TEAMS_TENANT_ID=...       # Azure AD tenant
+export TEAMS_CLIENT_ID=...       # App registration client ID
+export TEAMS_CLIENT_SECRET=...   # App registration client secret
+```
+
+Uses Microsoft Graph API with the same Azure AD app registration as Teams (see below). The app needs `Sites.Read.All` permission.
+
+```yaml
+sources:
+  sharepoint:
+    - name: eng-drive
+      site: acme.sharepoint.com/sites/engineering
+      paths: [/Shared Documents/Handbook]
+      filetypes: [.docx, .pdf, .xlsx]
+    - name: finance-drive
+      site: acme.sharepoint.com/sites/finance
+      files: [/Shared Documents/FY24/budget.xlsx]
+```
+
+Multi-site is first-class — each entry targets a different SharePoint site. Use `paths` for entire folder trees or `files` for specific documents. `filetypes` filters by extension (default: all supported types).
+
+Wiki gets: document content, folder structure, metadata. Spreadsheets are extracted as structured tables, Word docs and PDFs as sectioned text.
+
+---
+
+## Teams
+
+```bash
+export TEAMS_TENANT_ID=...       # Azure AD tenant
+export TEAMS_CLIENT_ID=...       # App registration client ID
+export TEAMS_CLIENT_SECRET=...   # App registration client secret
+```
+
+Same Azure AD app registration as SharePoint. The app needs `ChannelMessage.Read.All` permission.
+
+```yaml
+sources:
+  - type: teams
+    teams: ["Engineering", "Platform"]
+    channels: ["General", "Architecture Decisions", "Incidents"]
+    days: 90
+```
+
+Like Slack, best pointed at decision and incident channels rather than general chat. Messages are threaded, so replies stay grouped with their parent.
+
+Wiki gets: channel messages, threaded discussions, decision records. Cross-references Teams messages with SharePoint links when both sources are configured.
 
 ---
 

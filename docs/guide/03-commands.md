@@ -1,17 +1,18 @@
 # 3. Commands
 
-withctx has **12 top-level commands**. Every one answers a distinct question. If you learn five of them — `ask`, `sync`, `status`, `approve`, `lint` — you have 80% of the value.
+withctx has **13 top-level commands**. Every one answers a distinct question. If you learn five of them — `ask`, `sync`, `status`, `approve`, `lint` — you have 80% of the value.
 
 The other seven reveal themselves as you need them. You do not need to memorise anything.
 
 > **Aliases.** Older names (`ctx query`, `ctx ingest`, `ctx chat`, `ctx search`, `ctx serve`, `ctx mcp`, `ctx costs`, `ctx history`, `ctx sources`, `ctx repos`, etc.) still work as hidden aliases so existing scripts don't break — they just don't show up in `ctx help` anymore. New docs, new help output, and new tab completions use the canonical verbs below.
 
-## The 12 verbs at a glance
+## The 13 verbs at a glance
 
 | Verb | Question it answers |
 |---|---|
 | `ctx setup` | How do I start? |
 | `ctx doctor` | Is my environment healthy? |
+| `ctx llm` | Can I reach my LLM provider? |
 | `ctx config` | What am I configured to ingest from? |
 | `ctx sync` | Is the wiki up to date? |
 | `ctx ask` | What does the wiki say about X? |
@@ -207,6 +208,43 @@ ctx doctor --fix            # attempt auto-fix for anything fixable
 ```
 
 Run this when something's off. It checks Node version, API keys, provider reachability, ctx.yaml validity, .ctx/ writability, source paths, and wiki freshness age.
+
+### `ctx llm` — check LLM connectivity
+
+Sends a single ping to your configured LLM provider and reports whether it responded. Use it to verify keys, endpoints, and model availability before running anything that spends tokens.
+
+```bash
+ctx llm                     # human-readable connectivity report
+ctx llm --json              # machine-readable for CI
+```
+
+**What it reports:** provider name, model, endpoint URL, key source (env var / ctx.yaml / keychain), and round-trip latency.
+
+**Success output:**
+
+```
+LLM connectivity          ok
+  Provider                openai
+  Model                   gpt-4o
+  Endpoint                https://api.openai.com/v1
+  Key source              env OPENAI_API_KEY
+  Latency                 218 ms
+```
+
+**Failure output:**
+
+```
+LLM connectivity          FAIL
+  Provider                openai
+  Model                   gpt-4o
+  Endpoint                https://api.openai.com/v1
+  Key source              env OPENAI_API_KEY
+  Error                   401 Unauthorized — check your API key
+```
+
+Exit code is `0` on success, `1` on failure — useful in CI scripts and pre-flight checks.
+
+> **Cost.** The ping itself is free (a minimal API round-trip, no prompt tokens billed). It exists purely as a connectivity and auth check.
 
 ### `ctx sources` — manage inputs
 
