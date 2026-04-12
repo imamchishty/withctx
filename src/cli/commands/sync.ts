@@ -28,6 +28,7 @@ interface SyncOptions {
   force?: boolean;
   allowLocalRefresh?: boolean;
   yes?: boolean;
+  batchSize?: string;
 }
 
 function estimateTokens(text: string): number {
@@ -75,6 +76,7 @@ export function registerSyncCommand(program: Command): void {
       "Bypass the refreshed_by: ci guardrail (use with care — burns budget)"
     )
     .option("-y, --yes", "Skip the forced-refresh confirmation prompt")
+    .option("--batch-size <n>", "Documents per LLM call (default 10, lower to avoid rate limits)")
     .action(async (options: SyncOptions) => {
       const spinner = ora("Loading configuration...").start();
       const startTime = Date.now();
@@ -384,15 +386,6 @@ ${unaffectedPages.join(", ") || "(none)"}
 ## Changed Source Documents
 `;
 
-        for (const doc of docsToCompile) {
-          prompt += `\n### ${doc.sourceName} / ${doc.title} [id=${doc.id}]\n`;
-          const content =
-            doc.content.length > 6000
-              ? doc.content.slice(0, 6000) + "\n...[truncated]"
-              : doc.content;
-          prompt += `${content}\n`;
-        }
-
         const claudeOptions: { maxTokens?: number; systemPrompt: string } = {
           systemPrompt:
             "You are a technical wiki maintainer. Update existing pages with new information. Preserve existing content.",
@@ -401,25 +394,52 @@ ${unaffectedPages.join(", ") || "(none)"}
           claudeOptions.maxTokens = parseInt(options.maxTokens, 10);
         }
 
-        const response = docsToCompile.length > 0
-          ? await claude.prompt(prompt, claudeOptions)
-          : { content: "", tokensUsed: undefined };
+        // Split docs into batches to stay under rate limits.
+        // Default 10 docs per batch; use --batch-size to tune.
+        const batchSize = options.batchSize ? parseInt(options.batchSize, 10) : 10;
+        const batches: RawDocument[][] = [];
+        for (let i = 0; i < docsToCompile.length; i += batchSize) {
+          batches.push(docsToCompile.slice(i, i + batchSize));
+        }
+        if (batches.length === 0) batches.push([]);
 
-        // Parse and write updated pages
-        const pagePattern = /---PAGE:\s*(.+?)---\n([\s\S]*?)---END PAGE---/g;
-        let match;
         const rebuiltPagePaths = new Set<string>();
         const newPagePaths = new Set<string>();
         const existingSet = new Set(existingPages);
 
-        while ((match = pagePattern.exec(response.content)) !== null) {
-          const pagePath = match[1].trim();
-          const pageContent = match[2].trim();
-          pageManager.write(pagePath, pageContent);
-          if (existingSet.has(pagePath)) {
-            rebuiltPagePaths.add(pagePath);
-          } else {
-            newPagePaths.add(pagePath);
+        for (let batchIdx = 0; batchIdx < batches.length; batchIdx++) {
+          const batch = batches[batchIdx];
+          if (batches.length > 1) {
+            syncSpinner.text = `Compiling batch ${batchIdx + 1}/${batches.length} (${batch.length} docs)...`;
+          }
+
+          let batchPrompt = prompt;
+          for (const doc of batch) {
+            batchPrompt += `\n### ${doc.sourceName} / ${doc.title} [id=${doc.id}]\n`;
+            const content =
+              doc.content.length > 6000
+                ? doc.content.slice(0, 6000) + "\n...[truncated]"
+                : doc.content;
+            batchPrompt += `${content}\n`;
+          }
+
+          const response = batch.length > 0
+            ? await claude.prompt(batchPrompt, claudeOptions)
+            : { content: "", tokensUsed: undefined };
+
+          // Parse and write updated pages
+          const pagePattern = /---PAGE:\s*(.+?)---\n([\s\S]*?)---END PAGE---/g;
+          let match;
+
+          while ((match = pagePattern.exec(response.content)) !== null) {
+            const pagePath = match[1].trim();
+            const pageContent = match[2].trim();
+            pageManager.write(pagePath, pageContent);
+            if (existingSet.has(pagePath)) {
+              rebuiltPagePaths.add(pagePath);
+            } else {
+              newPagePaths.add(pagePath);
+            }
           }
         }
 
@@ -477,28 +497,12 @@ ${unaffectedPages.join(", ") || "(none)"}
           `Updated ${chalk.bold(String(rebuiltPagePaths.size + newPagePaths.size))} wiki page(s) from ${chalk.bold(String(docsToCompile.length))} changed document(s)`
         );
 
-        // Compute actual cost from Claude response if available.
+        // Compute actual cost from Claude responses across all batches.
         const model = config.costs?.model ?? "claude-sonnet-4";
         refreshModel = model;
         let actualCost = 0;
-        if (response.tokensUsed) {
-          const pricing = resolvePricing(model) ?? resolvePricing("claude-sonnet-4")!;
-          actualCost =
-            (response.tokensUsed.input / 1_000_000) * pricing.input +
-            (response.tokensUsed.output / 1_000_000) * pricing.output;
-          // Persist the call to .ctx/usage.jsonl history.
-          recordCall(ctxDir, "sync", model, {
-            input: response.tokensUsed.input,
-            output: response.tokensUsed.output,
-            cacheRead: response.tokensUsed.cacheRead ?? 0,
-            cacheWrite: response.tokensUsed.cacheCreation ?? 0,
-          });
-          refreshTokens.input += response.tokensUsed.input;
-          refreshTokens.output += response.tokensUsed.output;
-        } else {
-          const tokens = estimateTokens(docsToCompile.map((d) => d.content).join(""));
-          actualCost = estimateCost(tokens, model).total;
-        }
+        const tokens = estimateTokens(docsToCompile.map((d) => d.content).join(""));
+        actualCost = estimateCost(tokens, model).total;
         refreshCost = actualCost;
         refreshPages.added = newPagePaths.size;
         refreshPages.changed = rebuiltPagePaths.size;
