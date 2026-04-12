@@ -367,33 +367,79 @@ function checkEnvVars(
 
 function checkJiraSources(config: CtxConfig): CheckResult[] {
   const sources = config.sources?.jira ?? [];
-  return sources.map((source) =>
-    checkEnvVars(`Source: ${source.name} (jira)`, [
-      { name: "JIRA_URL", required: true },
-      { name: "JIRA_TOKEN", required: true },
-      { name: "JIRA_EMAIL", required: false },
-    ])
-  );
+  return sources.map((source) => {
+    const hasUrl = !!source.base_url || envIsSet("JIRA_URL");
+    const hasToken = !!source.token || envIsSet("JIRA_TOKEN");
+
+    const missing: string[] = [];
+    if (!hasUrl) missing.push("base_url (yaml) or JIRA_URL (env)");
+    if (!hasToken) missing.push("token (yaml) or JIRA_TOKEN (env)");
+
+    if (missing.length === 0) {
+      return {
+        label: `Source: ${source.name} (jira)`,
+        status: "pass" as const,
+        message: `base_url and token configured`,
+      };
+    }
+
+    return {
+      label: `Source: ${source.name} (jira)`,
+      status: "fail" as const,
+      message: `Missing: ${missing.join(", ")}`,
+      fix: `Set in ctx.yaml:\n     jira:\n       - name: ${source.name}\n         base_url: https://...\n         token: your-pat\n   Or export env vars:\n${missing.map((v) => `     export ${v}`).join("\n")}`,
+    };
+  });
 }
 
 function checkConfluenceSources(config: CtxConfig): CheckResult[] {
   const sources = config.sources?.confluence ?? [];
-  return sources.map((source) =>
-    checkEnvVars(`Source: ${source.name} (confluence)`, [
-      { name: "CONFLUENCE_URL", required: true },
-      { name: "CONFLUENCE_TOKEN", required: true },
-      { name: "CONFLUENCE_EMAIL", required: false },
-    ])
-  );
+  return sources.map((source) => {
+    // Check yaml values first, then fall back to env vars
+    const hasUrl = !!source.base_url || envIsSet("CONFLUENCE_URL");
+    const hasToken = !!source.token || envIsSet("CONFLUENCE_TOKEN");
+
+    const missing: string[] = [];
+    if (!hasUrl) missing.push("base_url (yaml) or CONFLUENCE_URL (env)");
+    if (!hasToken) missing.push("token (yaml) or CONFLUENCE_TOKEN (env)");
+
+    if (missing.length === 0) {
+      return {
+        label: `Source: ${source.name} (confluence)`,
+        status: "pass" as const,
+        message: `base_url and token configured`,
+      };
+    }
+
+    return {
+      label: `Source: ${source.name} (confluence)`,
+      status: "fail" as const,
+      message: `Missing: ${missing.join(", ")}`,
+      fix: `Set in ctx.yaml:\n     confluence:\n       - name: ${source.name}\n         base_url: https://...\n         token: your-pat\n   Or export env vars:\n${missing.map((v) => `     export ${v}`).join("\n")}`,
+    };
+  });
 }
 
 function checkGitHubSources(config: CtxConfig): CheckResult[] {
   const sources = config.sources?.github ?? [];
-  return sources.map((source) =>
-    checkEnvVars(`Source: ${source.name} (github)`, [
-      { name: "GITHUB_TOKEN", required: true },
-    ])
-  );
+  return sources.map((source) => {
+    const hasToken = !!source.token || envIsSet("GITHUB_TOKEN") || envIsSet("GH_TOKEN");
+
+    if (hasToken) {
+      return {
+        label: `Source: ${source.name} (github)`,
+        status: "pass" as const,
+        message: `token configured`,
+      };
+    }
+
+    return {
+      label: `Source: ${source.name} (github)`,
+      status: "fail" as const,
+      message: `Missing: token (yaml) or GITHUB_TOKEN (env)`,
+      fix: `Set in ctx.yaml:\n     github:\n       - name: ${source.name}\n         token: ghp_...\n   Or: export GITHUB_TOKEN=ghp_...`,
+    };
+  });
 }
 
 function checkTeamsSources(config: CtxConfig): CheckResult[] {
