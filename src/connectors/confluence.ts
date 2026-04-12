@@ -171,6 +171,21 @@ export class ConfluenceConnector implements SourceConnector {
         this.status.status = "connected";
         return true;
       }
+
+      // Self-hosted instances sometimes mount under /wiki even though
+      // they aren't *.atlassian.net (the auto-detect only fires for
+      // Cloud hostnames). Try /wiki/rest/api/... as a fallback before
+      // giving up — if it works, rewrite baseUrl for the rest of the
+      // session so every subsequent call goes to the right place.
+      if (!this.baseUrl.endsWith("/wiki")) {
+        const wikiResponse = await this.apiGetRaw(`${this.baseUrl}/wiki/rest/api/space?limit=1`);
+        if (wikiResponse.ok) {
+          this.baseUrl = `${this.baseUrl}/wiki`;
+          this.status.status = "connected";
+          return true;
+        }
+      }
+
       this.status.status = "error";
       this.status.error = `Confluence auth failed: HTTP ${response.status}`;
       return false;
@@ -518,7 +533,11 @@ export class ConfluenceConnector implements SourceConnector {
   }
 
   private async apiGet(path: string): Promise<Response> {
-    const url = `${this.baseUrl}${path}`;
+    return this.apiGetRaw(`${this.baseUrl}${path}`);
+  }
+
+  /** Fetch an absolute URL with the configured auth headers. */
+  private async apiGetRaw(url: string): Promise<Response> {
     const headers: Record<string, string> = {
       Accept: "application/json",
     };

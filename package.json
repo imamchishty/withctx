@@ -1,6 +1,6 @@
 {
   "name": "withctx",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Compiled context layer for AI agents — Claude compiles your project knowledge into a living wiki",
   "license": "MIT",
   "author": "Imam Chishty",

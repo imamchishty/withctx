@@ -66,7 +66,11 @@ const ENV_INTERPOLATION_LEAF_KEYS = new Set([
  */
 const ENV_INTERPOLATION_PARENT_KEYS = new Set(["headers"]);
 
-const ENV_PLACEHOLDER = /\$\{(\w+)\}/g;
+/**
+ * Matches `${VAR}` and `${VAR:-default}`.
+ * Group 1 = variable name, Group 2 = default value (may be undefined).
+ */
+const ENV_PLACEHOLDER = /\$\{(\w+)(?::-(.*?))?\}/g;
 
 /**
  * Resolve environment variable references in config values.
@@ -115,8 +119,8 @@ function resolveEnvVars(
       );
     }
 
-    return obj.replace(ENV_PLACEHOLDER, (_, varName) => {
-      return process.env[varName] ?? "";
+    return obj.replace(ENV_PLACEHOLDER, (_, varName, fallback) => {
+      return process.env[varName] ?? fallback ?? "";
     });
   }
   if (Array.isArray(obj)) {
